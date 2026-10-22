@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UNFOTABLE — One ID. Many worlds.</title>
+<meta name="description" content="UNFOTABLE ties a whole group of websites into a single front door. Claim your UNFO ID once — every connected place is one click away." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap" rel="stylesheet" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23000000'/%3E%3Ctext x='32' y='45' font-family='Georgia,serif' font-size='38' font-weight='600' fill='%23ffffff' text-anchor='middle'%3EU%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <button class="logo" onclick="A.go('public')" aria-label="UNFOTABLE home">
+        <span class="logo-tile serif">U</span>
+        <span class="logo-name serif">UNFOTABLE<b>.</b></span>
+      </button>
+      <div class="hd-actions" id="hd-actions"></div>
+    </div>
+  </header>
+
+  <main id="app" style="width:100%"></main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="ft-grid">
+        <div>
+          <div class="ft-head">
+            <span class="logo-tile serif">U</span>
+            <span class="ft-name serif">UNFOTABLE</span>
+          </div>
+          <p class="ft-desc">One ID. Many worlds. A simple, growing group of websites with a single front door.</p>
+        </div>
+        <div class="ft-col">
+          <div class="ft-col-title">Network</div>
+          <ul>
+            <li><button onclick="A.go('public')">Home</button></li>
+            <li><button onclick="A.footerDash()">Dashboard</button></li>
+            <li><a href="https://splid.unfo.workers.dev/" target="_blank" rel="noopener noreferrer">Splid ↗</a></li>
+          </ul>
+        </div>
+        <div class="ft-col">
+          <div class="ft-col-title">Curated by</div>
+          <p style="margin-top:8px"><b style="color:#faf9f5">Devanshu</b><br/>Owner of the UNFO network</p>
+        </div>
+      </div>
+      <div class="ft-bottom">
+        <span>© <span id="ft-year"></span> UNFOTABLE · All worlds reserved</span>
+      </div>
+    </div>
+  </footer>
+
+  <div id="toasts"></div>
+  <div class="modal-mask" id="modal-mask">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-title" id="modal-title"></div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="A.modalCancel()">Cancel</button>
+        <button class="btn btn-primary" id="modal-ok"></button>
+      </div>
+    </div>
+  </div>
+
+<script src="anime.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
