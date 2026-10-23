@@ -1,913 +1,1601 @@
-(() => {
 "use strict";
+/* ================================================================
+   UNFOTABLE — app.js (v1.5, split build)
+   v1.4 fixes carried over:
+   · Sidebar highlight guarded (Logout button has no href) — dashboard renders
+   · Sessions: "keep me signed in" = no expiry, until sign-out or deletion
+   · Owner-only "Delete account" control
+   · Footer theme icons class-driven
+   · Diagram labels no longer clipped
+   · ADMIN buttons match API permissions
+   · Thumbnail library/manual input conflict resolved
+   · Global error toasts + boot fail-safe (no black screens)
+   Layers: crypto → db → auth/api (authorization-gated) → UI
+   ================================================================ */
+document.documentElement.classList.add('js');
 
-/* ================= helpers ================= */
-const $  = (s, r) => (r || document).querySelector(s);
-const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
-const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-const dayKey = ts => { const d = new Date(ts); return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate(); };
-const fmtDay = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "2-digit" });
-const fmtFull = ts => new Date(ts).toLocaleDateString(undefined, { month: "short", day: "2-digit", year: "numeric" });
-const hostOf = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return String(u || ""); } };
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const FINE=matchMedia('(hover:hover) and (pointer:fine)').matches;
+const uid=p=>(p||'id')+'_'+[...crypto.getRandomValues(new Uint8Array(6))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const now=()=>Date.now();
+const DAY=864e5;
+/* safe storage wrapper — never throws (private mode etc.) */
+const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}},del(k){try{localStorage.removeItem(k)}catch(e){}}};
+/* official repository connection */
+const GH_URL='https://github.com/UNFOTABLE01/unfotable';
+const OWNER_ID='devanshu';
 
-/* ================= toasts ================= */
-function toast(title, desc) {
-  const wrap = $("#toasts");
-  if (!wrap) return;
-  const t = document.createElement("div");
-  t.className = "toast";
-  t.innerHTML = '<div class="toast-title">' + esc(title) + "</div>" + (desc ? '<div class="toast-desc">' + esc(desc) + "</div>" : "");
-  wrap.appendChild(t);
-  requestAnimationFrame(() => t.classList.add("show"));
-  setTimeout(() => { t.classList.remove("show"); setTimeout(() => t.remove(), 320); }, 3400);
-}
-
-/* ================= modal confirm ================= */
-let modalCb = null;
-function confirmBox(title, body, okLabel, cb) {
-  $("#modal-title").textContent = title;
-  $("#modal-body").textContent = body;
-  $("#modal-ok").textContent = okLabel || "Confirm";
-  modalCb = cb;
-  $("#modal-mask").classList.add("open");
-}
-
-/* ================= storage / db ================= */
-const K = { users: "unfo_users", sites: "unfo_sites", msgs: "unfo_msgs", sess: "unfo_sess", ver: "unfo_db_ver" };
-/* DB v2: ALL IDs are free — no account is pre-registered. Whoever claims
-   the ID "Devanshu" (any letter case) gets the owner role automatically. */
-const DB_VER = 2;
-const read = (k, f) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? f : v; } catch (e) { return f; } };
-const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-
-async function hashPw(pw, salt) {
-  const text = salt + "::" + pw;
-  if (window.crypto && crypto.subtle && crypto.subtle.digest) {
-    try {
-      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-    } catch (e) { /* fall through */ }
-  }
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 2654435761);
-    h2 = Math.imul(h2 ^ c, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
-}
-
-const validId = id => /^[A-Za-z0-9]{8,24}$/.test(id);
-
-async function seed() {
-  const ver = Number(read(K.ver, 0));
-  if (ver === DB_VER && localStorage.getItem(K.users)) return;
-  /* v1 → v2 migration: free every pre-registered ID (old builds seeded an
-     owner account that made "Devanshu" appear taken). Fresh start: zero
-     accounts, the Splid website only. */
-  const now = Date.now();
-  write(K.users, []);
-  write(K.sites, [{
-    id: "splid",
-    name: "Splid",
-    url: "https://splid.unfo.workers.dev/",
-    description: "The first member of the UNFOTABLE network — a live app running on Cloudflare Workers.",
-    createdAt: now - 14 * 864e5
-  }]);
-  write(K.msgs, []);
-  localStorage.removeItem(K.sess);
-  write(K.ver, DB_VER);
-}
-
-const allUsers = () => read(K.users, []);
-const allSites = () => read(K.sites, []).slice().sort((a, b) => a.createdAt - b.createdAt);
-const allMsgs  = () => read(K.msgs, []);
-const me = () => {
-  const id = read(K.sess, null);
-  return id ? (allUsers().find(u => u.id === id) || null) : null;
+/* ---------------- icons ---------------- */
+const I={
+upright:'<path d="M7 17L17 7M8 7h9v9"/>',right:'<path d="M5 12h14M13 6l6 6-6 6"/>',up:'<path d="M12 19V5M6 11l6-6 6 6"/>',
+star:'<polygon points="12 2.5 14.9 8.3 21.3 9.2 16.7 13.7 17.8 20 12 17.1 6.2 20 7.3 13.7 2.7 9.2 9.1 8.3"/>',
+pencil:'<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+trash:'<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>',
+plus:'<path d="M12 5v14M5 12h14"/>',search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+x:'<path d="M18 6L6 18M6 6l12 12"/>',
+eye:'<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+eyeoff:'<path d="M17.9 17.9A10 10 0 0 1 12 19c-7 0-10-7-10-7a17 17 0 0 1 4.1-5.1M9.9 5.2A9 9 0 0 1 12 5c7 0 10 7 10 7a17 17 0 0 1-2.2 3.2M14.1 14.1a3 3 0 1 1-4.2-4.2"/><path d="M2 2l20 20"/>',
+sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+moon:'<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',menu:'<path d="M3 7h18M3 12h18M3 17h18"/>',
+grid:'<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
+folder:'<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+palette:'<circle cx="12" cy="12" r="9"/><circle cx="8.5" cy="10.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10.5" r="1.1" fill="currentColor" stroke="none"/><path d="M8 16.5c1.2 1 2.5 1.5 4 1.5s2.8-.5 4-1.5"/>',
+file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
+image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>',
+list:'<path d="M8.5 6H21M8.5 12H21M8.5 18H21M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+sliders:'<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>',
+copy:'<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 8l5-5 5 5M12 3v12"/>',
+ext:'<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14L21 3"/>',
+check:'<path d="M20 6L9 17l-5-5"/>',alert:'<path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+info:'<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 11v5"/>',
+lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+shield:'<path d="M12 22s8-3.5 8-10V5l-8-3-8 3v7c0 6.5 8 10 8 10z"/>',
+key:'<path d="M11 17a4 4 0 1 0-4-4M11 17a4 4 0 0 1-4-4m4 4l-2.5 2.5M7 13L3.6 9.6m0 0L9 4.2 20.8 16l-2.4 2.4-2-2-2 2-1.8-1.8"/>',
+refresh:'<path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0 0 20.5 15"/>',
+clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+chevD:'<path d="M6 9l6 6 6-6"/>',chevL:'<path d="M15 18l-6-6 6-6"/>',chevR:'<path d="M9 18l6-6-6-6"/>',
+user:'<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 16 0v1"/>',
+mail:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 7L2 7"/>',
+github:'<path fill="currentColor" stroke="none" d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.34.95.11-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .96-.31 3.15 1.18a11 11 0 0 1 5.74 0c2.19-1.49 3.15-1.18 3.15-1.18.62 1.59.23 2.76.11 3.05.73.81 1.18 1.83 1.18 3.09 0 4.41-2.69 5.38-5.25 5.67.41.35.77 1.05.77 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.2.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/>',
+xbrand:'<path fill="currentColor" stroke="none" d="M18.9 1.2h3.7l-8.1 9.1L24 22.8h-7.4l-5.8-7.6-6.6 7.6H.5l8.6-9.8L0 1.2h7.6l5.2 6.9 6.1-6.9zm-1.3 19.5h2L6.5 3.2H4.3l13.3 17.5z"/>',
+linkedin:'<path fill="currentColor" stroke="none" d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.72v20.55C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.72C24 .77 23.2 0 22.22 0z"/>',
+orbit:'<circle cx="12" cy="12" r="3"/><ellipse cx="12" cy="12" rx="10" ry="4.5" transform="rotate(-24 12 12)"/>'
 };
-const saveUsers = u => write(K.users, u);
-const saveSites = s => write(K.sites, s);
-const saveMsgs  = m => write(K.msgs, m);
+const ic=(n,s='')=>`<svg class="ic ${s}" viewBox="0 0 24 24" aria-hidden="true">${I[n]||I.info}</svg>`;
 
-/* ================= anime.js glue ================= */
-const AN = window.anime || null;
-const canAnime = !!(AN && typeof AN.animate === "function");
-const stg = canAnime && AN.stagger ? AN.stagger : null;
-function an(targets, params) {
-  if (canAnime) {
-    try { AN.animate(targets, params); } catch (e) { hardShow(targets); }
-  } else {
-    hardShow(targets);
+/* ---------------- crypto: SHA-256 + PBKDF2-HMAC ---------------- */
+function sha256(bytes){
+  const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  const rr=(v,n)=>(v>>>n)|(v<<(32-n));
+  const l=bytes.length,total=((l+9+63)>>6)<<6;
+  const buf=new Uint8Array(total); buf.set(bytes); buf[l]=0x80;
+  const dv=new DataView(buf.buffer);
+  dv.setUint32(total-8,Math.floor(l/536870912)); dv.setUint32(total-4,(l<<3)>>>0);
+  const H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const w=new Uint32Array(64);
+  for(let off=0;off<total;off+=64){
+    for(let i=0;i<16;i++)w[i]=dv.getUint32(off+i*4);
+    for(let i=16;i<64;i++){const a=w[i-15],b=w[i-2];
+      w[i]=(w[i-16]+(rr(a,7)^rr(a,18)^(a>>>3))+w[i-7]+(rr(b,17)^rr(b,19)^(b>>>10)))>>>0;}
+    let[a,b,c,d,e,f,g,h]=H;
+    for(let i=0;i<64;i++){
+      const t1=(h+(rr(e,6)^rr(e,11)^rr(e,25))+((e&f)^(~e&g))+K[i]+w[i])>>>0;
+      const t2=((rr(a,2)^rr(a,13)^rr(a,22))+((a&b)^(a&c)^(b&c)))>>>0;
+      h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;}
+    H[0]=(H[0]+a)>>>0;H[1]=(H[1]+b)>>>0;H[2]=(H[2]+c)>>>0;H[3]=(H[3]+d)>>>0;
+    H[4]=(H[4]+e)>>>0;H[5]=(H[5]+f)>>>0;H[6]=(H[6]+g)>>>0;H[7]=(H[7]+h)>>>0;
   }
+  const out=new Uint8Array(32),o=new DataView(out.buffer);
+  H.forEach((v,i)=>o.setUint32(i*4,v)); return out;
 }
-function hardShow(targets) {
-  let els = [];
-  try { els = typeof targets === "string" ? $$(targets) : Array.prototype.slice.call(targets.nodeType ? [targets] : (targets || [])); } catch (e) {}
-  els.forEach(el => {
-    el.style.opacity = "1";
-    el.style.transform = "none";
-  });
+const concat=(...arrs)=>{const len=arrs.reduce((s,a)=>s+a.length,0),o=new Uint8Array(len);let n=0;for(const a of arrs){o.set(a,n);n+=a.length;}return o;};
+function hmac(key,msg){
+  let k=key; if(k.length>64)k=sha256(k);
+  const ip=new Uint8Array(64),op=new Uint8Array(64);
+  for(let i=0;i<64;i++){ip[i]=(k[i]||0)^0x36;op[i]=(k[i]||0)^0x5c;}
+  return sha256(concat(op,sha256(concat(ip,msg))));
 }
-function safetyShow(root) {
-  setTimeout(() => {
-    $$(".a-h, .a-rise, .rv, .hero-title span", root || document).forEach(el => {
-      if (!el.classList.contains("rv")) { el.style.opacity = "1"; el.style.transform = "none"; }
-    });
-  }, 2600);
-}
-
-/* ================= state ================= */
-let screen = "public";
-let authTab = "login";
-let dashTab = "portfolio";
-let editingSiteId = null;
-let msgTargetId = null;
-let inboxTimer = null;
-
-function stopTimers() { if (inboxTimer) { clearInterval(inboxTimer); inboxTimer = null; } }
-
-/* ================= header ================= */
-function renderHeader(u) {
-  const box = $("#hd-actions");
-  if (u === undefined) { box.innerHTML = ""; return; }
-  if (!u) {
-    box.innerHTML =
-      '<button class="btn btn-ghost" onclick="A.openAuth(\'login\')">Sign in</button>' +
-      '<button class="btn btn-primary" onclick="A.openAuth(\'register\')">Create ID</button>';
-  } else {
-    const isOwner = u.role === "owner";
-    box.innerHTML =
-      '<span class="badge" style="font-size:12.5px">' + esc(u.id) +
-      (isOwner ? ' <span class="owner-tag">· OWNER</span>' : "") + "</span>" +
-      (screen !== "dash"
-        ? '<button class="btn btn-primary" onclick="A.go(\'dash\')">' + (isOwner ? "Owner console" : "Dashboard") + "</button>"
-        : "") +
-      '<button class="btn btn-outline btn-icon" title="Sign out" aria-label="Sign out" onclick="A.signOut()">⎋</button>';
+function pbkdf2(password,salt,iters,dkLen=32){
+  const pw=new TextEncoder().encode(password),out=new Uint8Array(dkLen);
+  let block=1,off=0;
+  const enc4=n=>new Uint8Array([n>>>24&255,n>>>16&255,n>>>8&255,n&255]);
+  while(off<dkLen){
+    let u=hmac(pw,concat(salt,enc4(block))); const t=u.slice();
+    for(let i=1;i<iters;i++){u=hmac(pw,u);for(let j=0;j<32;j++)t[j]^=u[j];}
+    out.set(t.subarray(0,Math.min(32,dkLen-off)),off); off+=32; block++;
   }
+  return out;
 }
-
-/* ================= public view ================= */
-const HERO_WORD = "UNFOTABLE";
-const TILES = [
-  "linear-gradient(135deg, #1c1c1a 0%, #000000 100%)",
-  "linear-gradient(135deg, #4a4a47 0%, #1c1c1a 100%)",
-  "linear-gradient(135deg, #8a8778 0%, #56544a 100%)",
-  "linear-gradient(135deg, #33332f 0%, #0f0f0e 100%)"
-];
-const tileOf = i => TILES[i % TILES.length];
-
-function siteCardHTML(s, i) {
-  return (
-    '<a class="site-card" href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer" aria-label="Visit ' + esc(s.name) + '">' +
-      '<div class="site-card-top">' +
-        '<div class="tile serif" style="background:' + tileOf(i) + '">' + esc((s.name || "?").charAt(0).toUpperCase()) + "</div>" +
-        '<span class="go-ring">↗</span>' +
-      "</div>" +
-      '<h3 class="site-name serif">' + esc(s.name) + "</h3>" +
-      '<p class="site-desc">' + esc(s.description || "A member of the UNFOTABLE network.") + "</p>" +
-      '<div class="site-foot">' +
-        '<span class="badge host-badge">' + esc(hostOf(s.url)) + "</span>" +
-        '<span class="visit-hint">Visit site</span>' +
-      "</div>" +
-    "</a>"
-  );
+const b64e=u8=>btoa(Array.from(u8,b=>String.fromCharCode(b)).join(''));
+const b64d=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const PBK_ITER=50000;
+async function hashPassword(pw){
+  await new Promise(r=>setTimeout(r,30));
+  const salt=crypto.getRandomValues(new Uint8Array(16));
+  return `pbkdf2$${PBK_ITER}$${b64e(salt)}$${b64e(pbkdf2(pw,salt,PBK_ITER))}`;
 }
-
-function PublicView(u) {
-  const list = allSites();
-  const letters = HERO_WORD.split("").map(ch => '<span aria-hidden="true">' + esc(ch) + "</span>").join("");
-  return (
-  '<section class="hero">' +
-    '<div class="dots" aria-hidden="true"></div>' +
-    '<div class="glow a-h" aria-hidden="true"></div>' +
-    '<div class="wrap" style="position:relative">' +
-      '<div class="hero-badge a-h"><span class="live-dot"></span>THE UNFO NETWORK · LIVE</div>' +
-      '<h1 class="hero-title serif" aria-label="UNFOTABLE">' + letters + "</h1>" +
-      '<p class="hero-sub a-rise">One ID. Many worlds. UNFOTABLE ties a whole group of websites into a single front door — claim your ID once, and every connected place is one click away.</p>' +
-      '<div class="hero-cta a-rise">' +
-        (u ? '<button class="btn btn-primary btn-lg" onclick="A.go(\'dash\')">Open your dashboard →</button>' +
-             '<button class="btn btn-outline btn-lg" onclick="A.scrollGrid()">See the network</button>'
-           : '<button class="btn btn-primary btn-lg" onclick="A.openAuth(\'register\')">Claim your UNFO ID</button>' +
-             '<button class="btn btn-outline btn-lg" onclick="A.openAuth(\'login\')">Sign in with your ID →</button>') +
-      "</div>" +
-      '<div class="hero-stats a-rise">' +
-        '<div class="stat-box"><div class="stat-num serif" id="stat-sites">0</div><div class="stat-label">Sites connected</div></div>' +
-        '<div class="stat-box"><div class="stat-num serif">8+</div><div class="stat-label">Characters per ID</div></div>' +
-      "</div>" +
-    "</div>" +
-    '<div class="pulse-line" aria-hidden="true"><span class="pulse-dot"></span></div>' +
-  "</section>" +
-
-  '<section class="section" id="network-grid">' +
-    '<div class="wrap">' +
-      '<div class="rv" style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:16px">' +
-        "<div>" +
-          '<span class="sec-badge">🌐 The network</span>' +
-          '<h2 class="sec-title serif">Every website, one grid</h2>' +
-        "</div>" +
-        '<p style="max-width:380px;color:var(--muted);font-size:14.5px">Curated by the owner. Click any card to open that world in a new tab.</p>' +
-      "</div>" +
-      '<div class="site-grid">' +
-        (list.length
-          ? list.map((s, i) => '<div class="rv">' + siteCardHTML(s, i) + "</div>").join("")
-          : '<div class="empty rv" style="grid-column:1/-1">No websites in the network yet — the owner will curate them soon.</div>') +
-      "</div>" +
-    "</div>" +
-  "</section>" +
-
-  '<section class="section" style="padding-top:0" id="how">' +
-    '<div class="wrap">' +
-      '<div class="rv" style="text-align:center">' +
-        '<span class="sec-badge">✦ How UNFOTABLE works</span>' +
-        '<h2 class="sec-title serif">A tiny internet with one front door</h2>' +
-        '<p class="sec-sub">Three steps. No emails, no spam — just an ID and a password.</p>' +
-      "</div>" +
-      '<div class="grid grid-3">' +
-        [
-          ["☝", "Get your UNFO ID", "Every ID is free to claim. Pick 8 or more letters and digits, pair it with a password, and it is yours — sign back in anytime. The ID Devanshu unlocks the owner console."],
-          ["🖱", "Step inside the network", "Your ID works across the whole group. Sign in once and the entire collection of websites opens up from one dashboard."],
-          ["🌍", "Watch it grow", "New websites are curated into the grid by the owner. Every addition appears here live — no re-registering, no new accounts, ever."]
-        ].map((s, i) =>
-          '<div class="rv"><div class="step-card">' +
-            '<div class="step-icon">' + s[0] + "</div>" +
-            '<div class="step-kicker">Step ' + (i + 1) + "</div>" +
-            '<h3 class="step-title serif">' + s[1] + "</h3>" +
-            '<p class="step-body">' + s[2] + "</p>" +
-          "</div></div>"
-        ).join("") +
-      "</div>" +
-    "</div>" +
-  "</section>" +
-
-  '<section style="padding-bottom:96px">' +
-    '<div class="wrap">' +
-      '<div class="cta-banner rv">' +
-        '<div class="cta-glow" style="background:radial-gradient(circle, rgba(255,255,255,.10) 0%, transparent 70%);right:-96px;top:-96px"></div>' +
-        '<div class="cta-glow" style="background:radial-gradient(circle, rgba(255,255,255,.06) 0%, transparent 70%);left:-96px;bottom:-96px"></div>' +
-        '<h2 class="cta-title serif">Your seat in the network is waiting</h2>' +
-        '<p class="cta-sub">Ten seconds to create. Yours to keep. The whole group of websites, always within reach.</p>' +
-        '<button class="btn btn-white btn-lg" style="margin-top:30px" onclick="A.openAuth(\'register\')">Create your UNFO ID →</button>' +
-      "</div>" +
-    "</div>" +
-  "</section>"
-  );
+async function verifyPassword(pw,stored){
+  try{
+    const[,iters,salt,hash]=stored.split('$');
+    return b64e(pbkdf2(pw,b64d(salt),+iters))===hash;
+  }catch(e){return false;}
 }
+const randToken=()=>[...crypto.getRandomValues(new Uint8Array(24))].map(b=>b.toString(16).padStart(2,'0')).join('');
+const genTempPw=()=>{const A='abcdefghjkmnpqrstuvwxyz',B='ABCDEFGHJKMNPQRSTUVWXYZ',C='23456789',S='!@#$%&*';
+  const pick=s=>s[crypto.getRandomValues(new Uint8Array(1))[0]%s.length];
+  return [...Array(4)].map(()=>pick(A)).join('')+pick(B)+[...Array(3)].map(()=>pick(C)).join('')+pick(S)+pick(A);};
 
-function countUp(elm, target) {
-  const t0 = performance.now(), dur = 1100;
-  function step(now) {
-    const p = Math.min(1, (now - t0) / dur);
-    elm.textContent = String(Math.round(target * (1 - Math.pow(1 - p, 3))));
-    if (p < 1) requestAnimationFrame(step);
+/* ---------------- database ---------------- */
+const DBKEY='unfotable_db_v1', SESSKEY='unfotable_session';
+const CATS=[['personal','Personal'],['development','Development'],['ai-ml','AI & Machine Learning'],['portfolio','Portfolio'],['productivity','Productivity'],['experiments','Experiments'],['other','Other']];
+function seedDB(){
+  const t=now(),d=n=>t-n*DAY;
+  const ws=[
+    {id:uid('w'),title:'Studio Journal',description:'A slow-writing journal documenting process, notes, and half-finished thoughts.',url:'https://journal.example.com',categoryId:'personal',tags:['writing','notes'],thumbnail:'https://picsum.photos/seed/unfot-journal/640/400.jpg',status:'active',isFavorite:true,isPublished:true,createdAt:d(41),updatedAt:d(41),createdById:null},
+    {id:uid('w'),title:'Glyph Lab',description:'Interactive typography playground — variable fonts and cursor-reactive specimens.',url:'https://glyph.example.com',categoryId:'experiments',tags:['type','canvas'],thumbnail:'https://picsum.photos/seed/unfot-glyph/640/400.jpg',status:'development',isFavorite:false,isPublished:true,createdAt:d(28),updatedAt:d(28),createdById:null},
+    {id:uid('w'),title:'Vector Forge',description:'Small tools and utilities forged while learning systems programming.',url:'https://forge.example.com',categoryId:'development',tags:['tools','cli'],thumbnail:'https://picsum.photos/seed/unfot-forge/640/400.jpg',status:'active',isFavorite:false,isPublished:true,createdAt:d(22),updatedAt:d(22),createdById:null},
+    {id:uid('w'),title:'Prompt Garden',description:'A living collection of prompts, evaluations, and model experiments.',url:'https://garden.example.com',categoryId:'ai-ml',tags:['ai','llm'],thumbnail:'https://picsum.photos/seed/unfot-garden/640/400.jpg',status:'active',isFavorite:true,isPublished:true,createdAt:d(15),updatedAt:d(15),createdById:null},
+    {id:uid('w'),title:'Daily Index',description:'One-page dashboard for habits, reading list, and the day\u2019s single priority.',url:'https://index.example.com',categoryId:'productivity',tags:['habits','focus'],thumbnail:'https://picsum.photos/seed/unfot-index/640/400.jpg',status:'active',isFavorite:false,isPublished:true,createdAt:d(9),updatedAt:d(9),createdById:null},
+    {id:uid('w'),title:'Folio Twenty-Five',description:'Selected client and personal work, updated seasonally.',url:'https://folio.example.com',categoryId:'portfolio',tags:['work','case-studies'],thumbnail:'https://picsum.photos/seed/unfot-folio/640/400.jpg',status:'archived',isFavorite:false,isPublished:false,createdAt:d(4),updatedAt:d(4),createdById:null}];
+  const pr=[
+    {id:uid('p'),title:'Unfotable Core',description:'The system that powers this hub — directory, dashboard, and design engine in one considered codebase.',coverImage:'https://picsum.photos/seed/unfot-core/900/560.jpg',technologies:['TypeScript','Next.js','PostgreSQL','Prisma'],demoUrl:'https://unfotable.example.com',sourceUrl:GH_URL,status:'published',createdAt:d(38),updatedAt:d(30),createdById:null},
+    {id:uid('p'),title:'Inkwell',description:'A markdown editor with a true focus mode and local-first sync across sessions.',coverImage:'https://picsum.photos/seed/unfot-inkwell/900/560.jpg',technologies:['React','CRDT','IndexedDB'],demoUrl:'',sourceUrl:'https://github.com/example/inkwell',status:'draft',createdAt:d(24),updatedAt:d(24),createdById:null},
+    {id:uid('p'),title:'Signal Map',description:'Realtime visualization of personal API traffic, drawn as a living constellation.',coverImage:'https://picsum.photos/seed/unfot-signal/900/560.jpg',technologies:['D3','WebSockets','Node'],demoUrl:'https://signal.example.com',sourceUrl:'',status:'published',createdAt:d(18),updatedAt:d(12),createdById:null},
+    {id:uid('p'),title:'Paper Router',description:'Turns long-form articles into printable zines — reading, slowed down on purpose.',coverImage:'https://picsum.photos/seed/unfot-paper/900/560.jpg',technologies:['Python','WeasyPrint'],demoUrl:'',sourceUrl:'',status:'archived',createdAt:d(60),updatedAt:d(50),createdById:null}];
+  return {version:1,provisioned:false,
+    users:[],sessions:[],
+    categories:CATS.map(([slug,name])=>({id:'cat_'+slug,slug,name})),
+    websites:ws,projects:pr,media:[],
+    settings:{siteTitle:'UNFOTABLE',monogram:'U',logoMediaId:null,accent:'#7FB069',defaultTheme:'dark',sessionHours:12,allowRegistration:false,itemsPerPage:8,
+      nav:{home:'Home',websites:'My Websites',projects:'Projects',about:'About'},
+      hero:{l1:'ONE SPACE.',l2:'INFINITE POSSIBILITIES.',sub:'Your digital world, thoughtfully connected.',body:'A private headquarters for every site you run, every project you ship, and every tool you rely on — designed, curated, and connected in one place.',cta1:'Explore My Universe',cta2:'Enter Dashboard'},
+      ticker:'Websites|Projects|Tools|Accounts|Experiments',
+      intro:{statement:'A quiet command center for a loud digital life.',body:'UNFOTABLE gathers everything you make and manage into one editorial, considered space. No feeds, no noise — just your work, arranged with intent.'},
+      connect:{body:'Each entry in the directory links back to this single point of origin. One hub, many orbits.'},
+      directory:{body:'Live websites, indexed like a personal archive. Search, filter, and open any project in seconds.'},
+      projectsSec:{body:'Selected builds and experiments — from first commit to published release.'},
+      control:{features:[['grid','Directory CRUD','Add, edit and retire website entries with categories, tags and publish state.'],['users','People & roles','Create accounts, assign roles, disable or delete access, revoke sessions.'],['palette','Appearance','Tune wordmark, accent, navigation and homepage copy — no code required.'],['shield','Audit trail','Every sensitive action is logged with actor, target and timestamp.']]},
+      about:{title:'Designed & built by Devanshu.',body:'I design and build digital things — websites, tools, and small systems with careful typography. UNFOTABLE is the front door to all of them: a personal headquarters that stays out of the way and lets the work speak.',facts:[['Based in','Earth \u00B7 UTC+5:30'],['Focus','Design engineering \u00B7 Web'],['Source','github.com/UNFOTABLE01'],['Currently','Shipping quietly']]},
+      experience:{title:'Build once. Link forever.',body:'Every new site joins the constellation. Start with the dashboard, or explore the universe first.'},
+      footer:{note:'everything, in one place.',socials:[
+        {key:'github',label:'GitHub',url:GH_URL},
+        {key:'xbrand',label:'X / Twitter',url:'https://x.com/'},
+        {key:'linkedin',label:'LinkedIn',url:'https://linkedin.com/'},
+        {key:'mail',label:'Email',url:'mailto:hello@unfotable.example'}]}},
+    auditLogs:[{id:uid('l'),actorId:null,actorName:'System',action:'system.seed',entityType:'system',entityId:'seed',meta:'Initial sample content created',createdAt:t}],
+    loginAttempts:{},regWindow:{count:0,start:0}};
+}
+/* migrations + owner guarantee — runs on every load and every import */
+function repairDB(d){
+  if(d.settings&&d.settings.accent==='#EFE83D')d.settings.accent='#7FB069';
+  if(d.settings&&d.settings.footer&&Array.isArray(d.settings.footer.socials)){
+    const norm=s=>String(s&&s.url||'').replace(/\/+$/,'').toLowerCase();
+    if(!d.settings.footer.socials.some(s=>norm(s)===GH_URL))
+      d.settings.footer.socials.unshift({key:'github',label:'GitHub',url:GH_URL});
   }
-  requestAnimationFrame(step);
+  const owner=(d.users||[]).find(u=>u.username===OWNER_ID);
+  if(owner){owner.isOwner=true;owner.role='SUPER_ADMIN';owner.status='active';}
+  return d;
 }
-
-function runPublicAnims() {
-  const letters = $$(".hero-title span");
-  letters.forEach(l => { l.style.opacity = "0"; l.style.transform = "translateY(60px) rotate(4deg)"; });
-  an(letters, {
-    opacity: [0, 1], translateY: [60, 0], rotate: [4, 0],
-    duration: 900, delay: stg ? stg(45) : (el, i) => i * 45, ease: "outExpo"
-  });
-  an(".hero-badge", { opacity: [0, 1], translateY: [-10, 0], duration: 700, ease: "outCubic" });
-  an(".hero-sub, .hero-cta, .hero-stats", { opacity: [0, 1], translateY: [26, 0], duration: 850, delay: stg ? stg(120) : (el, i) => i * 120, ease: "outExpo" });
-  an(".glow", { opacity: [0, 0.6], duration: 1600, ease: "outQuad" });
-  const sEl = $("#stat-sites");
-  if (sEl) countUp(sEl, allSites().length);
-
-  /* scroll reveals */
-  const obs = new IntersectionObserver(entries => {
-    entries.forEach(en => {
-      if (en.isIntersecting) {
-        const els = $$(".rv", en.target).length ? [en.target] : [];
-        (els.length ? els : [en.target]).forEach(el => el.classList.add("rv-in"));
-        obs.unobserve(en.target);
-      }
-    });
-  }, { threshold: 0.12 });
-  $$(".rv").forEach((el, i) => { el.style.transitionDelay = (i % 3) * 90 + "ms"; obs.observe(el); });
-  safetyShow();
-}
-
-/* ================= auth view ================= */
-function AuthView() {
-  const isLogin = authTab === "login";
-  return (
-  '<main class="auth-page">' +
-    '<div class="dots" aria-hidden="true"></div>' +
-    '<div class="auth-glow" aria-hidden="true"></div>' +
-    '<div class="auth-box">' +
-      '<div style="text-align:center" class="a-h">' +
-        '<button class="back-link" onclick="A.go(\'public\')">← Back to UNFOTABLE</button>' +
-        '<h1 class="auth-title serif">' + (isLogin ? "Welcome back" : "Claim your ID") + "</h1>" +
-        '<p class="auth-sub">' + (isLogin
-          ? "Sign in with your UNFO ID and password to open the network."
-          : "Every ID is free. 8+ letters and digits — pick it once, keep it forever. The ID Devanshu unlocks the owner console.") + "</p>" +
-      "</div>" +
-      '<div class="card auth-card a-rise">' +
-        '<div class="tabbar" role="tablist">' +
-          '<button class="tab ' + (isLogin ? "active" : "") + '" onclick="A.authMode(\'login\')">Sign in</button>' +
-          '<button class="tab ' + (isLogin ? "" : "active") + '" onclick="A.authMode(\'register\')">Create ID</button>' +
-        "</div>" +
-        '<form style="margin-top:20px" onsubmit="return A.submitAuth(event)">' +
-          '<div class="field">' +
-            '<label class="label" for="f-id">UNFO ID</label>' +
-            '<input class="input" id="f-id" autocomplete="username" placeholder="' + (isLogin ? "e.g. Devanshu" : "e.g. Stellar2026") + '" maxlength="24" />' +
-            (isLogin ? "" : '<div class="hint">8–24 characters · letters and digits only</div>') +
-          "</div>" +
-          '<div class="field">' +
-            '<label class="label" for="f-pw">Password</label>' +
-            '<input class="input" id="f-pw" type="password" autocomplete="' + (isLogin ? "current-password" : "new-password") + '" placeholder="Your password" />' +
-            (isLogin ? "" : '<div class="hint">At least 6 characters — you will need it to sign back in.</div>') +
-          "</div>" +
-          '<button class="btn btn-primary" type="submit" style="width:100%;height:46px;margin-top:6px">' +
-            (isLogin ? "Enter the network" : "Create my ID") +
-          "</button>" +
-        "</form>" +
-        '<div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border);text-align:center;font-size:13px;color:var(--muted)">' +
-          (isLogin
-            ? 'No ID yet? <button style="font-weight:600;color:#000" onclick="A.authMode(\'register\')">Create one in ten seconds</button>'
-            : 'Already have an ID? <button style="font-weight:600;color:#000" onclick="A.authMode(\'login\')">Sign in instead</button>') +
-        "</div>" +
-      "</div>" +
-      '<p style="text-align:center;margin-top:18px;font-size:13px;color:var(--muted)">Your ID works across every website in the UNFOTABLE group.</p>' +
-    "</div>" +
-  "</main>"
-  );
-}
-
-function runAuthAnims() {
-  an(".auth-page .a-h", { opacity: [0, 1], translateY: [-8, 0], duration: 600, ease: "outCubic" });
-  an(".auth-page .a-rise", { opacity: [0, 1], translateY: [26, 0], duration: 800, delay: 120, ease: "outExpo" });
-  safetyShow();
-}
-
-/* ================= dashboard shells ================= */
-function dashHead(badge, title, sub) {
-  return (
-    '<div class="dash-head a-rise">' +
-      '<span class="badge badge-ink">' + badge + "</span>" +
-      '<h1 class="dash-title serif">' + title + "</h1>" +
-      '<p class="dash-sub">' + sub + "</p>" +
-    "</div>"
-  );
-}
-
-function statCard(ico, label, num, cap) {
-  return (
-    '<div class="card stat-card a-rise">' +
-      '<div class="stat-ico">' + ico + " " + esc(label) + "</div>" +
-      '<div class="num serif">' + num + "</div>" +
-      '<div class="cap">' + esc(cap) + "</div>" +
-    "</div>"
-  );
-}
-
-function rowItemHTML(s, i, opts) {
-  opts = opts || {};
-  return (
-    '<div class="row-item">' +
-      '<span class="row-tile serif" style="background:' + tileOf(i) + '">' + esc((s.name || "?").charAt(0).toUpperCase()) + "</span>" +
-      '<span class="row-main">' +
-        '<span class="row-name">' + esc(s.name) + '<span class="row-idx">#' + (i + 1) + "</span></span>" +
-        '<span class="row-meta">' + esc(s.url) + "</span>" +
-      "</span>" +
-      (opts.extra || "") +
-    "</div>"
-  );
-}
-
-function siteRowHTML(s, i) {
-  const editing = editingSiteId === s.id;
-  if (editing) {
-    return (
-      '<div class="card card-pad" style="border-color:rgba(0,0,0,.4)">' +
-        '<div class="action-row" style="justify-content:space-between">' +
-          '<span class="badge badge-soft">Editing #' + (i + 1) + " · changes go live instantly</span>" +
-        "</div>" +
-        '<div class="edit-grid">' +
-          '<div><label class="label">Name</label><input class="input" id="ed-name" value="' + esc(s.name) + '" maxlength="40" /></div>' +
-          '<div><label class="label">URL</label><input class="input" id="ed-url" value="' + esc(s.url) + '" placeholder="https://…" /></div>' +
-          '<div class="full"><label class="label">Description</label><textarea class="textarea" id="ed-desc" style="min-height:64px" maxlength="220">' + esc(s.description || "") + "</textarea></div>" +
-        "</div>" +
-        '<div class="action-row" style="margin-top:12px">' +
-          '<button class="btn btn-primary btn-sm" onclick="A.saveSite(\'' + s.id + '\')">Save & publish</button>' +
-          '<button class="btn btn-ghost btn-sm" onclick="A.cancelEdit()">Cancel</button>' +
-        "</div>" +
-      "</div>"
-    );
-  }
-  return (
-    '<div class="card card-pad">' +
-      '<div style="display:flex;align-items:center;gap:12px">' +
-        '<span class="row-tile serif" style="background:' + tileOf(i) + ';height:40px;width:40px">' + esc((s.name || "?").charAt(0).toUpperCase()) + "</span>" +
-        '<span class="row-main">' +
-          '<span class="row-name">' + esc(s.name) + '<span class="row-idx">#' + (i + 1) + "</span></span>" +
-          '<span class="row-meta">' + esc(s.url) + "</span>" +
-        "</span>" +
-        '<span class="action-row">' +
-          '<a class="btn btn-outline btn-sm" href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">Open ↗</a>' +
-          '<button class="btn btn-outline btn-sm" onclick="A.editSite(\'' + s.id + '\')">Edit</button>' +
-          '<button class="btn btn-danger btn-sm" onclick="A.delSite(\'' + s.id + '\')">Remove</button>' +
-        "</span>" +
-      "</div>" +
-      (s.description ? '<p style="margin-top:10px;font-size:13.5px;color:var(--muted)">' + esc(s.description) + "</p>" : "") +
-    "</div>"
-  );
-}
-
-function pwFormHTML(prefix) {
-  return (
-    '<form onsubmit="return A.changePw(event, \'' + prefix + '\')">' +
-      '<div class="field"><label class="label">Current password</label><input class="input" id="' + prefix + '-cur" type="password" autocomplete="current-password" /></div>' +
-      '<div class="field"><label class="label">New password</label><input class="input" id="' + prefix + '-new" type="password" autocomplete="new-password" placeholder="At least 6 characters" /></div>' +
-      '<button class="btn btn-primary btn-sm" type="submit">Update password</button>' +
-    "</form>"
-  );
-}
-
-/* ================= user dashboard ================= */
-function inboxHTML(u) {
-  const list = allMsgs().filter(m => m.to === u.id).sort((a, b) => b.ts - a.ts);
-  const unread = list.filter(m => !m.read).length;
-  let inner;
-  if (!list.length) {
-    inner = '<div class="empty">No messages yet — the owner can reach you here, straight to your ID.</div>';
-  } else {
-    inner = list.map(m =>
-      '<div class="msg-item ' + (m.read ? "" : "unread") + '">' +
-        '<div class="msg-top">' +
-          '<span class="msg-from">✉ ' + esc(m.from) + (m.read ? "" : ' <span class="badge badge-ink" style="font-size:9px;padding:2px 7px;margin-left:6px">NEW</span>') + "</span>" +
-          '<span class="msg-time">' + esc(fmtFull(m.ts)) + "</span>" +
-        "</div>" +
-        '<div class="msg-body">' + esc(m.content) + "</div>" +
-        (m.read ? "" : '<div class="msg-actions"><button class="btn btn-ghost btn-sm" onclick="A.msgRead(\'' + m.id + '\')">Mark as read</button></div>') +
-      "</div>"
-    ).join("");
-  }
-  return (
-    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
-      '<div><div class="card-title serif">Inbox</div><div class="card-sub">Messages delivered to your ID</div></div>' +
-      (unread ? '<span class="badge">' + unread + " unread</span>" : "") +
-    "</div>" +
-    '<div style="display:grid;gap:10px;margin-top:14px">' + inner + "</div>" +
-    (list.length && unread
-      ? '<div class="msg-actions"><button class="btn btn-outline btn-sm" style="margin-top:10px" onclick="A.markAllRead()">Mark all as read</button></div>'
-      : "")
-  );
-}
-
-function UserView(u) {
-  const list = allSites();
-  const unread = allMsgs().filter(m => m.to === u.id && !m.read).length;
-  return (
-    '<main class="dash">' +
-      '<div class="wrap">' +
-        dashHead("UNFO MEMBER", "Dashboard", "Signed in as <b>" + esc(u.id) + "</b> — one ID for the whole network.") +
-        '<div class="stats-row">' +
-          statCard("🆔", "Your ID", esc(u.id), "yours to keep, forever") +
-          statCard("🌐", "Sites unlocked", list.length, "open with this one ID") +
-          statCard("✉", "Unread messages", unread, "waiting in your inbox") +
-          statCard("📅", "Member since", esc(fmtFull(u.createdAt)), "day you claimed it") +
-        "</div>" +
-        '<div class="dash-grid dash-grid-3 mt-16">' +
-          '<div style="display:grid;gap:16px;align-content:start">' +
-            '<div class="card card-pad a-rise"><div id="inbox">' + inboxHTML(u) + "</div></div>" +
-            '<div class="card card-pad a-rise">' +
-              '<div class="card-title serif">The network</div><div class="card-sub">Every connected website — one click away</div>' +
-              '<div style="display:grid;gap:10px;margin-top:14px">' +
-                (list.length
-                  ? list.map((s, i) => rowItemHTML(s, i, {
-                      extra: '<a class="btn btn-outline btn-sm" href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">Open ↗</a>'
-                    })).join("")
-                  : '<div class="empty">No websites yet — the owner curates this grid.</div>') +
-              "</div>" +
-            "</div>" +
-          "</div>" +
-          '<div style="display:grid;gap:16px;align-content:start">' +
-            '<div class="card card-pad a-rise" style="background:linear-gradient(160deg,#fff 0%,#f5efe7 130%)">' +
-              '<span class="badge badge-ink">YOUR UNFO ID</span>' +
-              '<div class="serif" style="font-size:34px;font-weight:600;margin-top:12px;letter-spacing:-.01em;word-break:break-all">' + esc(u.id) + "</div>" +
-              '<p style="margin-top:8px;font-size:13.5px;color:var(--muted)">Use this ID with your password to sign back in from any device. It unlocks every website in the UNFOTABLE group.</p>' +
-              '<div class="action-row" style="margin-top:14px">' +
-                '<button class="btn btn-outline btn-sm" onclick="A.copyId()">Copy ID</button>' +
-                '<span class="badge badge-soft">Member since ' + esc(fmtFull(u.createdAt)) + "</span>" +
-              "</div>" +
-            "</div>" +
-            '<div class="card card-pad a-rise">' +
-              '<div class="card-title serif">Security</div><div class="card-sub">Change your password anytime</div>' +
-              '<div style="margin-top:14px">' + pwFormHTML("upw") + "</div>" +
-            "</div>" +
-          "</div>" +
-        "</div>" +
-      "</div>" +
-    "</main>"
-  );
-}
-
-function startInboxPolling(u) {
-  stopTimers();
-  inboxTimer = setInterval(() => {
-    if (screen !== "dash") return stopTimers();
-    const cur = me();
-    if (!cur || cur.role === "owner") return stopTimers();
-    const box = $("#inbox");
-    if (box) box.innerHTML = inboxHTML(cur);
-  }, 4000);
-}
-
-/* ================= owner console ================= */
-function growthData() {
-  const days = [];
-  const now = new Date(); now.setHours(0, 0, 0, 0);
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 864e5);
-    days.push({ key: dayKey(d.getTime()), label: fmtDay(d.getTime()), count: 0 });
-  }
-  allUsers().forEach(u => {
-    const k = dayKey(u.createdAt);
-    const hit = days.find(x => x.key === k);
-    if (hit) hit.count++;
-  });
-  return days;
-}
-
-function chartHTML() {
-  const data = growthData();
-  const max = Math.max(1, ...data.map(d => d.count));
-  return (
-    '<div class="chart">' +
-      data.map(d =>
-        '<div class="chart-col">' +
-          '<div class="growth-bar" style="height:' + Math.max(3, Math.round((d.count / max) * 148)) + 'px" title="' + d.label + ": " + d.count + ' new ID(s)"></div>' +
-          '<span class="chart-day">' + d.label + "</span>" +
-        "</div>"
-      ).join("") +
-    "</div>"
-  );
-}
-
-function OwnerView(u) {
-  const others = allUsers().filter(x => x.id !== u.id);
-  const list = allSites();
-  const sent = allMsgs().filter(m => m.from === u.id).sort((a, b) => b.ts - a.ts);
-  const unreadForMembers = allMsgs().filter(m => !m.read && m.to !== u.id).length;
-
-  let tabContent = "";
-  if (dashTab === "portfolio") {
-    const recent = sent.slice(0, 5);
-    tabContent =
-      '<div class="dash-grid dash-grid-3 mt-16">' +
-        '<div class="card card-pad a-rise">' +
-          '<div class="card-title serif">New IDs — last 14 days</div><div class="card-sub">How fast the network is growing.</div>' +
-          chartHTML() +
-        "</div>" +
-        '<div style="display:grid;gap:16px;align-content:start">' +
-          '<div class="card card-pad a-rise">' +
-            '<div class="card-title serif">Network overview</div><div class="card-sub">Every connected website.</div>' +
-            '<div style="display:grid;gap:10px;margin-top:14px">' +
-              (list.length ? list.map((s, i) => rowItemHTML(s, i, { extra: '<a class="btn btn-outline btn-sm" href="' + esc(s.url) + '" target="_blank" rel="noopener noreferrer">↗</a>' })).join("")
-                : '<div class="empty">No websites yet — add one from the Websites tab.</div>') +
-            "</div>" +
-          "</div>" +
-          '<div class="card card-pad a-rise">' +
-            '<div class="card-title serif">Recent messages</div><div class="card-sub">The latest things you sent.</div>' +
-            '<div style="display:grid;gap:10px;margin-top:14px">' +
-              (recent.length
-                ? recent.map(m =>
-                    '<div class="msg-item"><div class="msg-top"><span class="msg-from">→ ' + esc(m.to) + (m.broadcast ? ' <span class="badge badge-soft" style="font-size:9px;padding:2px 7px">BROADCAST</span>' : "") + '</span><span class="msg-time">' + esc(fmtFull(m.ts)) + "</span></div>" +
-                    '<div class="msg-body">' + esc(m.content.length > 120 ? m.content.slice(0, 120) + "…" : m.content) + "</div></div>"
-                  ).join("")
-                : '<div class="empty">Nothing sent yet — write to a member from the Members tab.</div>') +
-            "</div>" +
-          "</div>" +
-        "</div>" +
-      "</div>";
-  } else if (dashTab === "websites") {
-    tabContent =
-      '<div class="card card-pad a-rise mt-16">' +
-        '<div class="card-title serif">Add a website</div><div class="card-sub">It goes live on the public grid the moment you save.</div>' +
-        '<div class="edit-grid" style="margin-top:14px">' +
-          '<div><label class="label">Name</label><input class="input" id="ns-name" placeholder="e.g. Pulse" maxlength="40" /></div>' +
-          '<div><label class="label">URL</label><input class="input" id="ns-url" placeholder="https://…" /></div>' +
-          '<div class="full"><label class="label">Description <span style="text-transform:none;letter-spacing:0">(optional)</span></label><input class="input" id="ns-desc" placeholder="One line about this world" maxlength="220" /></div>' +
-        "</div>" +
-        '<button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="A.addSite()">+ Add website</button>' +
-      "</div>" +
-      '<div style="display:grid;gap:12px;margin-top:16px">' +
-        (list.length
-          ? list.map((s, i) => '<div class="a-rise">' + siteRowHTML(s, i) + "</div>").join("")
-          : '<div class="empty">The grid is empty — add your first website above.</div>') +
-      "</div>";
-  } else if (dashTab === "members") {
-    const compose = msgTargetId
-      ? '<div class="card card-pad a-rise" style="border-color:rgba(0,0,0,.45)">' +
-          '<div class="card-title serif">Message → ' + esc(msgTargetId) + "</div>" +
-          '<textarea class="textarea" id="dm-text" style="margin-top:10px" placeholder="Write something for ' + esc(msgTargetId) + '…"></textarea>' +
-          '<div class="action-row" style="margin-top:12px">' +
-            '<button class="btn btn-primary btn-sm" onclick="A.sendCompose()">Send message</button>' +
-            '<button class="btn btn-ghost btn-sm" onclick="A.cancelCompose()">Cancel</button>' +
-          "</div>" +
-        "</div>"
-      : "";
-    tabContent =
-      compose +
-      '<div class="card card-pad a-rise mt-16">' +
-        '<div class="card-title serif">Broadcast</div><div class="card-sub">One message, delivered to every member ID.</div>' +
-        '<textarea class="textarea" id="bc-text" style="margin-top:10px" placeholder="Network announcement…"></textarea>' +
-        '<div class="action-row" style="margin-top:12px">' +
-          '<button class="btn btn-primary btn-sm" onclick="A.broadcast()" ' + (others.length ? "" : "disabled") + ">Broadcast to " + others.length + " member" + (others.length === 1 ? "" : "s") + "</button>" +
-        "</div>" +
-      "</div>" +
-      '<div class="card card-pad a-rise mt-16">' +
-        '<div class="card-title serif">Member IDs</div><div class="card-sub">' + others.length + ' registered' + (others.length ? " — remove an ID or write to it directly" : "") + '</div>' +
-        '<div class="table-wrap" style="margin-top:12px">' +
-          (others.length
-            ? '<table class="data"><thead><tr><th>Member</th><th>Role</th><th>Joined</th><th>Unread</th><th style="text-align:right">Actions</th></tr></thead><tbody>' +
-              others.map(x => {
-                const un = allMsgs().filter(m => m.to === x.id && !m.read).length;
-                return (
-                  "<tr>" +
-                    '<td><span style="display:inline-flex;align-items:center;gap:10px">' +
-                      '<span class="avatar serif" style="background:linear-gradient(135deg,#3d3d3a,#000)">' + esc(x.id.charAt(0).toUpperCase()) + "</span>" +
-                      "<b>" + esc(x.id) + "</b></span></td>" +
-                    '<td><span class="badge badge-soft">' + esc(x.role) + "</span></td>" +
-                    "<td>" + esc(fmtFull(x.createdAt)) + "</td>" +
-                    "<td>" + (un ? '<span class="badge badge-ink" style="font-size:10px;padding:2px 8px">' + un + "</span>" : "—") + "</td>" +
-                    '<td style="text-align:right"><span class="action-row" style="justify-content:flex-end">' +
-                      '<button class="btn btn-outline btn-sm" onclick="A.msgMember(\'' + x.id + '\')">Message</button>' +
-                      '<button class="btn btn-danger btn-sm" onclick="A.removeMember(\'' + x.id + '\')">Remove</button>' +
-                    "</span></td>" +
-                  "</tr>"
-                );
-              }).join("") +
-              "</tbody></table>"
-            : '<div class="empty" style="margin-top:6px">No member IDs yet. When someone creates one, it appears here.</div>') +
-        "</div>" +
-      "</div>";
-  } else {
-    tabContent =
-      '<div class="dash-grid dash-grid-2 mt-16">' +
-        '<div class="card card-pad a-rise">' +
-          '<div class="card-title serif">Owner password</div><div class="card-sub">Keep the console locked down.</div>' +
-          '<div style="margin-top:14px">' + pwFormHTML("opw") + "</div>" +
-        "</div>" +
-        '<div class="card card-pad a-rise">' +
-          '<div class="card-title serif">How this edition stores data</div>' +
-          '<p style="margin-top:10px;font-size:14px;color:var(--muted)">This standalone edition of UNFOTABLE keeps every ID, password hash, website and message in this browser\'s local storage — nothing leaves your machine. Clearing the browser\'s site data resets the network to its original state: zero registered IDs + the Splid website — every ID is free to claim, and <b>Devanshu</b> unlocks the owner console.</p>' +
-          '<div class="action-row" style="margin-top:14px">' +
-            '<span class="badge badge-soft">ID · ' + esc(u.id) + "</span>" +
-            '<span class="badge badge-soft">Members · ' + others.length + "</span>" +
-            '<span class="badge badge-soft">Websites · ' + list.length + "</span>" +
-          "</div>" +
-        "</div>" +
-      "</div>";
-  }
-
-  return (
-    '<main class="dash">' +
-      '<div class="wrap">' +
-        dashHead("👑 OWNER · Full permissions", "Owner console", "Signed in as <b>" + esc(u.id) + "</b> — see every ID, curate the network, and reach any member directly.") +
-        '<div class="stats-row">' +
-          statCard("👥", "Member IDs", others.length, "excluding you") +
-          statCard("🌐", "Websites", list.length, "in the network") +
-          statCard("✉", "Messages sent", sent.length, "all time") +
-          statCard("📣", "Undelivered", unreadForMembers, "awaiting members") +
-        "</div>" +
-        '<div class="tabbar mt-24" style="max-width:640px">' +
-          [["portfolio", "Portfolio"], ["websites", "Websites"], ["members", "Members"], ["settings", "Settings"]]
-            .map(t => '<button class="tab ' + (dashTab === t[0] ? "active" : "") + '" onclick="A.dashTab(\'' + t[0] + '\')">' + t[1] + "</button>")
-            .join("") +
-        "</div>" +
-        tabContent +
-      "</div>" +
-    "</main>"
-  );
-}
-
-function runDashAnims(isOwner) {
-  an(".dash .a-rise", { opacity: [0, 1], translateY: [24, 0], duration: 750, delay: stg ? stg(70) : (el, i) => i * 70, ease: "outExpo" });
-  if (canAnime) {
-    const bars = $$(".growth-bar");
-    bars.forEach(b => { b.style.transform = "scaleY(0)"; });
-    an(bars, { scaleY: [0, 1], duration: 800, delay: stg ? stg(35) : (el, i) => i * 35, ease: "outExpo" });
-  }
-  safetyShow();
-}
-
-/* ================= actions ================= */
-const A = {
-
-  /* navigation */
-  go(s) { screen = s; render(); window.scrollTo({ top: 0, behavior: "auto" }); },
-  openAuth(tab) { authTab = tab; screen = "auth"; render(); window.scrollTo({ top: 0 }); },
-  authMode(tab) { authTab = tab; render(); },
-  dashTab(t) { dashTab = t; editingSiteId = null; msgTargetId = null; render(); },
-  scrollGrid() { const el = $("#network-grid"); if (el) el.scrollIntoView({ behavior: "smooth" }); },
-  footerDash() { const u = me(); if (u) A.go("dash"); else A.openAuth("login"); },
-
-  /* auth */
-  async submitAuth(e) {
-    e.preventDefault();
-    const idEl = $("#f-id"), pwEl = $("#f-pw");
-    const id = (idEl.value || "").trim();
-    const pw = pwEl.value || "";
-    if (!id || !pw) return toast("Missing details", "Enter both your ID and password.");
-    if (authTab === "login") {
-      const u = allUsers().find(x => x.id === id);
-      if (!u) return toast("No such ID", "Check the spelling — IDs are 8–24 letters and digits.");
-      const h = await hashPw(pw, u.salt);
-      if (h !== u.hash) return toast("Wrong password", "Try again — you can reset nothing here, passwords matter.");
-      /* Safety: the Devanshu ID always carries owner permissions. */
-      if (u.id.toLowerCase() === "devanshu" && u.role !== "owner") {
-        u.role = "owner";
-        saveUsers(allUsers().map(x => (x.id === u.id ? u : x)));
-      }
-      write(K.sess, u.id);
-      toast("Signed in as " + u.id, u.role === "owner" ? "Welcome back — the owner console is ready." : "Welcome to UNFOTABLE.");
-      A.go("dash");
-    } else {
-      if (!validId(id)) return toast("Invalid ID", "Use 8–24 characters — letters and digits only.");
-      if (allUsers().some(x => x.id.toLowerCase() === id.toLowerCase())) return toast("ID already taken", "Pick another 8+ character ID.");
-      if (pw.length < 6) return toast("Weak password", "Use at least 6 characters — you will need it to sign back in.");
-      const salt = "unfo-" + Math.random().toString(36).slice(2, 8);
-      /* Every ID is free — and the ID "Devanshu" (any letter case) carries full owner permissions. */
-      const isOwner = id.toLowerCase() === "devanshu";
-      const user = { id, salt, hash: await hashPw(pw, salt), role: isOwner ? "owner" : "user", createdAt: Date.now() };
-      saveUsers(allUsers().concat([user]));
-      write(K.sess, user.id);
-      toast(isOwner ? "Owner ID claimed" : "Welcome to UNFOTABLE", isOwner ? id + " now holds full owner access." : "Your ID " + id + " is live across the network.");
-      A.go("dash");
+function loadDB(){
+  try{
+    const raw=LS.get(DBKEY);
+    if(raw){
+      const d=JSON.parse(raw);
+      if(d&&d.version===1){repairDB(d);LS.set(DBKEY,JSON.stringify(d));return d;}
     }
-    return false;
-  },
-  signOut() {
-    localStorage.removeItem(K.sess);
-    toast("Signed out", "Your ID will be here when you come back.");
-    A.go("public");
-  },
-  async changePw(e, prefix) {
-    e.preventDefault();
-    const u = me();
-    if (!u) return false;
-    const cur = $("#" + prefix + "-cur").value || "";
-    const nw = $("#" + prefix + "-new").value || "";
-    const h = await hashPw(cur, u.salt);
-    if (h !== u.hash) return toast("Wrong current password", "The console stays locked without it.");
-    if (nw.length < 6) return toast("Too short", "New password needs at least 6 characters.");
-    const users = allUsers();
-    const hit = users.find(x => x.id === u.id);
-    hit.salt = "unfo-" + Math.random().toString(36).slice(2, 8);
-    hit.hash = await hashPw(nw, hit.salt);
-    saveUsers(users);
-    toast("Password updated", "Use the new one next time you sign in.");
-    e.target.reset();
-    return false;
-  },
+  }catch(e){}
+  const d=seedDB();LS.set(DBKEY,JSON.stringify(d));return d;
+}
+let db=loadDB();
+function saveDB(){try{LS.set(DBKEY,JSON.stringify(db));}catch(e){toast('Storage limit reached — remove some media or export a backup.','error');}}
+let S={user:null,session:null,home:{q:'',cat:'all',sort:'recent'},dash:{},sub:'overview'};
 
-  /* user dash */
-  copyId() {
-    const u = me();
-    if (!u) return;
-    const done = () => toast("Copied", u.id + " is on your clipboard.");
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u.id).then(done, () => toast("Copy failed", "Select and copy it manually: " + u.id));
-    else toast("Your ID", u.id);
-  },
-  msgRead(id) {
-    const msgs = allMsgs();
-    const m = msgs.find(x => x.id === id);
-    if (m) { m.read = true; saveMsgs(msgs); }
-    const box = $("#inbox");
-    const u = me();
-    if (box && u) box.innerHTML = inboxHTML(u);
-  },
-  markAllRead() {
-    const u = me();
-    if (!u) return;
-    const msgs = allMsgs().map(m => (m.to === u.id ? Object.assign({}, m, { read: true }) : m));
-    saveMsgs(msgs);
-    toast("Inbox cleared", "All messages marked as read.");
-    render();
-  },
+/* ---------------- authorization ---------------- */
+const CAPS={websites_manage:['SUPER_ADMIN','ADMIN','EDITOR'],projects_manage:['SUPER_ADMIN','ADMIN','EDITOR'],
+  homepage_edit:['SUPER_ADMIN','ADMIN','EDITOR'],media_manage:['SUPER_ADMIN','ADMIN','EDITOR'],
+  users_view:['SUPER_ADMIN','ADMIN'],users_create:['SUPER_ADMIN','ADMIN'],users_manage:['SUPER_ADMIN'],
+  appearance:['SUPER_ADMIN','ADMIN'],logs_view:['SUPER_ADMIN'],settings:['SUPER_ADMIN']};
+/* SUPER_ADMIN (the owner) bypasses the capability map entirely — full access, always. */
+const can=(u,cap)=>!!u&&u.status==='active'&&(u.role==='SUPER_ADMIN'||(CAPS[cap]||[]).includes(u.role));
 
-  /* owner — websites (live editing) */
-  addSite() {
-    const name = ($("#ns-name").value || "").trim();
-    const url = ($("#ns-url").value || "").trim();
-    const desc = ($("#ns-desc").value || "").trim();
-    if (!name) return toast("Name required", "Give the website a short name.");
-    if (!/^https?:\/\/.+\..+/.test(url)) return toast("Invalid URL", "Use a full address like https://example.com");
-    const sites = read(K.sites, []);
-    sites.push({ id: uid(), name, url, description: desc, createdAt: Date.now() });
-    saveSites(sites);
-    toast("Website published", name + " is live on the public grid.");
-    render();
-  },
-  editSite(id) { editingSiteId = id; render(); window.scrollTo({ top: $("#app").scrollHeight, behavior: "smooth" }); },
-  cancelEdit() { editingSiteId = null; render(); },
-  saveSite(id) {
-    const name = ($("#ed-name").value || "").trim();
-    const url = ($("#ed-url").value || "").trim();
-    const desc = ($("#ed-desc").value || "").trim();
-    if (!name) return toast("Name required", "The tile needs a name.");
-    if (!/^https?:\/\/.+\..+/.test(url)) return toast("Invalid URL", "Use a full address like https://example.com");
-    const sites = read(K.sites, []);
-    const s = sites.find(x => x.id === id);
-    if (s) { s.name = name; s.url = url; s.description = desc; saveSites(sites); }
-    editingSiteId = null;
-    toast("Saved & live", name + " has been updated everywhere.");
-    render();
-  },
-  delSite(id) {
-    const sites = read(K.sites, []);
-    const s = sites.find(x => x.id === id);
-    confirmBox("Remove website?", (s ? s.name : "This site") + " will disappear from the public grid immediately.", "Remove", () => {
-      saveSites(sites.filter(x => x.id !== id));
-      toast("Website removed", "The grid updates for everyone right away.");
-      render();
-    });
-  },
+/* ---------------- audit ---------------- */
+const AUDIT_LABELS={'system.seed':'System seeded','auth.login':'Signed in','auth.logout':'Signed out','auth.failed':'Failed sign-in','auth.lock':'Sign-in lockout triggered','user.create':'Created user','user.register':'Registered account','user.role':'Changed role','user.status':'Changed account status','user.reset':'Reset password','user.sessions':'Revoked sessions','user.delete':'Deleted user account','password.change':'Changed password','website.create':'Created website','website.update':'Updated website','website.delete':'Deleted website','website.fav':'Toggled favorite','website.publish':'Toggled publishing','project.create':'Created project','project.update':'Updated project','project.delete':'Deleted project','project.status':'Changed project status','settings.appearance':'Updated appearance','settings.homepage':'Updated homepage','settings.general':'Updated settings','media.upload':'Uploaded media','media.delete':'Deleted media','logs.clear':'Cleared audit logs','data.export':'Exported data','data.import':'Imported data','data.reset':'Factory reset'};
+function audit(actorId,actorName,action,entityType,entityId,meta){
+  db.auditLogs.unshift({id:uid('l'),actorId,actorName,action,entityType,entityId,meta:meta||'',createdAt:now()});
+  if(db.auditLogs.length>500)db.auditLogs.length=500;
+  saveDB();
+}
 
-  /* owner — members & messages */
-  msgMember(id) { msgTargetId = id; dashTab = "members"; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
-  cancelCompose() { msgTargetId = null; render(); },
-  sendCompose() {
-    const u = me();
-    const txt = ($("#dm-text").value || "").trim();
-    if (!u || !msgTargetId) return;
-    if (!txt) return toast("Empty message", "Write something first.");
-    const msgs = allMsgs();
-    msgs.push({ id: uid(), to: msgTargetId, from: u.id, content: txt, read: false, broadcast: false, ts: Date.now() });
-    saveMsgs(msgs);
-    msgTargetId = null;
-    toast("Message sent", "Delivered to " + msgTargetId + "'s inbox.");
-    render();
-  },
-  broadcast() {
-    const u = me();
-    const txt = ($("#bc-text").value || "").trim();
-    if (!u) return;
-    if (!txt) return toast("Empty broadcast", "Write the announcement first.");
-    const targets = allUsers().filter(x => x.role !== "owner");
-    if (!targets.length) return toast("No members yet", "Nobody to broadcast to right now.");
-    const msgs = allMsgs();
-    const ts = Date.now();
-    targets.forEach(t => msgs.push({ id: uid(), to: t.id, from: u.id, content: txt, read: false, broadcast: true, ts }));
-    saveMsgs(msgs);
-    toast("Broadcast sent", "Delivered to " + targets.length + " member" + (targets.length === 1 ? "" : "s") + ".");
-    render();
-  },
-  removeMember(id) {
-    const target = allUsers().find(x => x.id === id);
-    if (!target) return;
-    if (target.role === "owner") return toast("Not allowed", "The owner ID cannot be removed.");
-    confirmBox("Remove ID " + id + "?", "They will lose access to the network, and their messages will be erased. This cannot be undone.", "Remove ID", () => {
-      saveUsers(allUsers().filter(x => x.id !== id));
-      saveMsgs(allMsgs().filter(m => m.to !== id && m.from !== id));
-      if (msgTargetId === id) msgTargetId = null;
-      toast("ID removed", id + " is no longer part of UNFOTABLE.");
-      render();
-    });
-  },
-
-  /* modal */
-  modalCancel() { $("#modal-mask").classList.remove("open"); modalCb = null; },
-  modalOk() { const cb = modalCb; A.modalCancel(); if (cb) cb(); }
-};
-window.A = A;
-
-/* ================= render + init ================= */
-function render() {
-  stopTimers();
-  const u = me();
-  renderHeader(u);
-  const app = $("#app");
-  if (screen === "auth") {
-    app.innerHTML = AuthView();
-    runAuthAnims();
-  } else if (screen === "dash" && u) {
-    app.innerHTML = u.role === "owner" ? OwnerView(u) : UserView(u);
-    runDashAnims(u.role === "owner");
-    if (u.role !== "owner") startInboxPolling(u);
-  } else {
-    app.innerHTML = PublicView(u);
-    runPublicAnims();
+/* ---------------- auth api ---------------- */
+const acct=(u)=>({id:u.id,username:u.username,displayName:u.displayName,role:u.role,status:u.status,createdAt:u.createdAt,lastLoginAt:u.lastLoginAt,mustChangePassword:!!u.mustChangePassword,isOwner:!!u.isOwner});
+function sessionState(){
+  const tok=LS.get(SESSKEY); if(!tok)return null;
+  const s=db.sessions.find(x=>x.token===tok); if(!s){LS.del(SESSKEY);return null;}
+  /* expiresAt === -1 means a persistent session: valid until sign-out or account deletion */
+  if(s.expiresAt>0&&s.expiresAt<now()){db.sessions=db.sessions.filter(x=>x.token!==tok);saveDB();LS.del(SESSKEY);return null;}
+  const u=db.users.find(x=>x.id===s.userId);
+  if(!u||u.status!=='active'){db.sessions=db.sessions.filter(x=>x.userId===s.userId);saveDB();LS.del(SESSKEY);return null;}
+  return {user:u,session:s};
+}
+async function apiLogin(username,password,remember){
+  const key=(username||'').trim().toLowerCase();
+  const la=db.loginAttempts[key];
+  if(la&&la.until&&la.until>now()){const s=Math.ceil((la.until-now())/1000);return{ok:false,error:`Too many attempts. Locked for ${s}s.`};}
+  const u=db.users.find(x=>x.username.toLowerCase()===key);
+  const oku=u&&u.status==='active'&&await verifyPassword(password,u.passwordHash);
+  if(!oku){
+    const rec=db.loginAttempts[key]||{n:0,until:0}; rec.n++;
+    if(rec.n>=5){rec.until=now()+Math.min(30*2**(rec.n-5),900)*1000;rec.n=0;audit(null,key,'auth.lock','user',key,'Lockout after repeated failures');}
+    db.loginAttempts[key]=rec;saveDB();
+    audit(null,key,'auth.failed','user',key,'Invalid credentials');
+    return{ok:false,error:rec.until>now()?`Too many attempts. Locked for ${Math.ceil((rec.until-now())/1000)}s.`:'Invalid username or password.'};
   }
+  delete db.loginAttempts[key];
+  /* "keep me signed in" → persistent session (expiresAt = -1, no expiry).
+     Without it, the configurable session-hours window applies. */
+  const hours=remember?0:(db.settings.sessionHours||12);
+  const s={token:randToken(),userId:u.id,createdAt:now(),expiresAt:remember?-1:now()+hours*36e5};
+  db.sessions.push(s); u.lastLoginAt=now(); saveDB();
+  LS.set(SESSKEY,s.token);
+  audit(u.id,u.username,'auth.login','user',u.id,remember?'Persistent session — active until sign-out or account deletion':'Timed session created');
+  return{ok:true,user:u};
+}
+function apiLogout(){const st=sessionState();if(st){db.sessions=db.sessions.filter(x=>x.token!==st.session.token);audit(st.user.id,st.user.username,'auth.logout','user',st.user.id,'');saveDB();}LS.del(SESSKEY);S.user=null;S.session=null;}
+
+/* ---------------- content api ---------------- */
+const requirePerm=(u,cap)=>{if(!can(u,cap))throw new Error('Not authorized for this action.');};
+function validURL(v){try{const x=new URL(v);return(x.protocol==='http:'||x.protocol==='https:')?x.href:null;}catch(e){return null;}}
+function parseTags(v){return(String(v||'').split(',').map(t=>t.trim().replace(/^#/,'')).filter(Boolean).slice(0,6));}
+
+const api={
+ createWebsite(u,data){requirePerm(u,'websites_manage');
+   const url=validURL(data.url); if(!url)throw new Error('Enter a valid http(s) URL.');
+   if(!data.title||data.title.trim().length<2||data.title.length>80)throw new Error('Title must be 2\u201380 characters.');
+   if((data.description||'').length>240)throw new Error('Description must be under 240 characters.');
+   const w={id:uid('w'),title:data.title.trim(),description:(data.description||'').trim(),url,categoryId:db.categories.some(c=>c.id===data.categoryId)?data.categoryId:'cat_other',
+     tags:parseTags(data.tags),thumbnail:data.thumbnail||'',status:['active','development','archived'].includes(data.status)?data.status:'active',
+     isFavorite:!!data.isFavorite,isPublished:data.isPublished!==false,createdAt:now(),updatedAt:now(),createdById:u.id};
+   db.websites.unshift(w);audit(u.id,u.username,'website.create','website',w.id,w.title);saveDB();return w;},
+ updateWebsite(u,id,data){requirePerm(u,'websites_manage');
+   const w=db.websites.find(x=>x.id===id); if(!w)throw new Error('Website not found.');
+   const url=validURL(data.url); if(!url)throw new Error('Enter a valid http(s) URL.');
+   if(!data.title||data.title.trim().length<2||data.title.length>80)throw new Error('Title must be 2\u201380 characters.');
+   Object.assign(w,{title:data.title.trim(),description:(data.description||'').trim(),url,categoryId:db.categories.some(c=>c.id===data.categoryId)?data.categoryId:w.categoryId,
+     tags:parseTags(data.tags),thumbnail:data.thumbnail||'',status:['active','development','archived'].includes(data.status)?data.status:w.status,
+     isFavorite:!!data.isFavorite,isPublished:data.isPublished!==false,updatedAt:now()});
+   audit(u.id,u.username,'website.update','website',w.id,w.title);saveDB();return w;},
+ deleteWebsite(u,id){requirePerm(u,'websites_manage');
+   const w=db.websites.find(x=>x.id===id); if(!w)throw new Error('Website not found.');
+   db.websites=db.websites.filter(x=>x.id!==id);audit(u.id,u.username,'website.delete','website',id,w.title);saveDB();},
+ toggleFav(u,id){requirePerm(u,'websites_manage');const w=db.websites.find(x=>x.id===id);if(!w)return;w.isFavorite=!w.isFavorite;w.updatedAt=now();audit(u.id,u.username,'website.fav','website',id,w.title+(w.isFavorite?' \u2605':''));saveDB();},
+ toggleWPublish(u,id){requirePerm(u,'websites_manage');const w=db.websites.find(x=>x.id===id);if(!w)return;w.isPublished=!w.isPublished;w.updatedAt=now();audit(u.id,u.username,'website.publish','website',id,(w.isPublished?'Published: ':'Unpublished: ')+w.title);saveDB();},
+ createProject(u,data){requirePerm(u,'projects_manage');
+   if(!data.title||data.title.trim().length<2||data.title.length>90)throw new Error('Title must be 2\u201390 characters.');
+   if((data.description||'').length>400)throw new Error('Description must be under 400 characters.');
+   const p={id:uid('p'),title:data.title.trim(),description:(data.description||'').trim(),coverImage:data.coverImage||'',
+     technologies:parseTags(data.technologies).slice(0,10),demoUrl:data.demoUrl?validURL(data.demoUrl):'',sourceUrl:data.sourceUrl?validURL(data.sourceUrl):'',
+     status:['draft','published','archived'].includes(data.status)?data.status:'draft',createdAt:now(),updatedAt:now(),createdById:u.id};
+   if(data.demoUrl&&!p.demoUrl)throw new Error('Demo URL must be a valid http(s) URL.');
+   if(data.sourceUrl&&!p.sourceUrl)throw new Error('Source URL must be a valid http(s) URL.');
+   db.projects.unshift(p);audit(u.id,u.username,'project.create','project',p.id,p.title);saveDB();return p;},
+ updateProject(u,id,data){requirePerm(u,'projects_manage');
+   const p=db.projects.find(x=>x.id===id); if(!p)throw new Error('Project not found.');
+   if(!data.title||data.title.trim().length<2||data.title.length>90)throw new Error('Title must be 2\u201390 characters.');
+   const d=validURL(data.demoUrl||''),s=validURL(data.sourceUrl||'');
+   if(data.demoUrl&&!d)throw new Error('Demo URL must be a valid http(s) URL.');
+   if(data.sourceUrl&&!s)throw new Error('Source URL must be a valid http(s) URL.');
+   Object.assign(p,{title:data.title.trim(),description:(data.description||'').trim(),coverImage:data.coverImage||'',technologies:parseTags(data.technologies).slice(0,10),demoUrl:d||'',sourceUrl:s||'',updatedAt:now()});
+   audit(u.id,u.username,'project.update','project',p.id,p.title);saveDB();return p;},
+ setProjectStatus(u,id,status){requirePerm(u,'projects_manage');
+   const p=db.projects.find(x=>x.id===id); if(!p)throw new Error('Project not found.');
+   if(!['draft','published','archived'].includes(status))throw new Error('Invalid status.');
+   p.status=status;p.updatedAt=now();audit(u.id,u.username,'project.status','project',id,`${p.title} \u2192 ${status}`);saveDB();},
+ deleteProject(u,id){requirePerm(u,'projects_manage');
+   const p=db.projects.find(x=>x.id===id); if(!p)throw new Error('Project not found.');
+   db.projects=db.projects.filter(x=>x.id!==id);audit(u.id,u.username,'project.delete','project',id,p.title);saveDB();},
+ async createUser(u,data){requirePerm(u,'users_create');
+   const un=(data.username||'').trim().toLowerCase();
+   if(!/^[a-z0-9_.]{3,24}$/.test(un))throw new Error('User ID: 3\u201324 chars, lowercase letters, digits, dot or underscore.');
+   if(db.users.some(x=>x.username.toLowerCase()===un))throw new Error('That user ID already exists.');
+   if(!(data.displayName||'').trim()||data.displayName.length>40)throw new Error('Display name is required (max 40 chars).');
+   if((data.password||'').length<8)throw new Error('Initial password must be at least 8 characters.');
+   const allowed=u.role==='SUPER_ADMIN'?['SUPER_ADMIN','ADMIN','EDITOR','USER']:['EDITOR','USER'];
+   if(!allowed.includes(data.role))throw new Error('You cannot assign that role.');
+   const nu={id:uid('u'),username:un,displayName:data.displayName.trim(),passwordHash:await hashPassword(data.password),role:data.role,status:'active',createdAt:now(),updatedAt:now(),lastLoginAt:null,mustChangePassword:true,isOwner:false};
+   db.users.push(nu);audit(u.id,u.username,'user.create','user',nu.id,`${un} (${data.role})`);saveDB();return{user:acct(nu),tempPassword:data.password};},
+ setRole(u,id,role){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   if(t.id===u.id)throw new Error('You cannot change your own role.');
+   if(t.isOwner&&role!=='SUPER_ADMIN')throw new Error('The owner account must remain SUPER_ADMIN.');
+   if(t.role==='SUPER_ADMIN'&&u.role!=='SUPER_ADMIN')throw new Error('Only a super administrator can modify this account.');
+   if(!['SUPER_ADMIN','ADMIN','EDITOR','USER'].includes(role))throw new Error('Invalid role.');
+   t.role=role;t.updatedAt=now();audit(u.id,u.username,'user.role','user',t.id,`${t.username} \u2192 ${role}`);saveDB();},
+ setStatus(u,id,status){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   if(t.id===u.id)throw new Error('You cannot disable your own account.');
+   if(t.isOwner&&status!=='active')throw new Error('The owner account cannot be disabled.');
+   if(!['active','disabled'].includes(status))throw new Error('Invalid status.');
+   t.status=status;t.updatedAt=now();
+   if(status==='disabled')db.sessions=db.sessions.filter(x=>x.userId!==t.id);
+   audit(u.id,u.username,'user.status','user',t.id,`${t.username} \u2192 ${status}`);saveDB();},
+ deleteUser(u,id){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   if(t.isOwner||t.id===u.id)throw new Error('The owner account cannot be deleted.');
+   db.users=db.users.filter(x=>x.id!==id);
+   db.sessions=db.sessions.filter(x=>x.userId!==id);
+   delete db.loginAttempts[t.username];
+   audit(u.id,u.username,'user.delete','user',id,`@${t.username} deleted — sessions ended, ID freed`);saveDB();},
+ async resetPassword(u,id){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   const tmp=genTempPw(); t.passwordHash=await hashPassword(tmp); t.mustChangePassword=true; t.updatedAt=now();
+   db.sessions=db.sessions.filter(x=>x.userId!==t.id);
+   audit(u.id,u.username,'user.reset','user',t.id,`Temporary password issued for ${t.username} (value not logged)`);saveDB();return tmp;},
+ revokeSessions(u,id){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   const n=db.sessions.filter(x=>x.userId===t.id).length;
+   db.sessions=db.sessions.filter(x=>x.userId!==t.id||x.token===LS.get(SESSKEY));
+   audit(u.id,u.username,'user.sessions','user',t.id,`${n} session(s) revoked for ${t.username}`);saveDB();return n;},
+ async changePassword(u,cur,next){ if(!u)throw new Error('Sign in first.');
+   if(!await verifyPassword(cur,u.passwordHash))throw new Error('Current password is incorrect.');
+   if((next||'').length<8)throw new Error('New password must be at least 8 characters.');
+   if(next===cur)throw new Error('Choose a password you have not used here.');
+   u.passwordHash=await hashPassword(next); u.mustChangePassword=false; u.updatedAt=now();
+   audit(u.id,u.username,'password.change','user',u.id,'Password changed');saveDB();},
+ updateAppearance(u,data){requirePerm(u,'appearance');
+   const st=db.settings;
+   st.siteTitle=(data.siteTitle||'UNFOTABLE').trim().slice(0,30);
+   st.monogram=(data.monogram||'U').trim().slice(0,3);
+   st.logoMediaId=db.media.some(m=>m.id===data.logoMediaId)?data.logoMediaId:null;
+   st.accent=ACCENTS.some(a=>a.v===data.accent)?data.accent:st.accent;
+   st.defaultTheme=data.defaultTheme==='light'?'light':'dark';
+   st.nav={home:(data.navHome||'Home').trim().slice(0,20)||'Home',websites:(data.navWebsites||'My Websites').trim().slice(0,24)||'My Websites',projects:(data.navProjects||'Projects').trim().slice(0,20)||'Projects',about:(data.navAbout||'About').trim().slice(0,20)||'About'};
+   st.footer.note=(data.footerNote||'').trim().slice(0,80);
+   st.footer.socials=(data.socials||st.footer.socials).map(s=>({...s,url:validURL(s.url)||s.url||''}));
+   audit(u.id,u.username,'settings.appearance','settings','appearance',st.siteTitle);saveDB();applyIdentity();},
+ updateHomepage(u,data){requirePerm(u,'homepage_edit');
+   const st=db.settings;
+   st.hero={l1:(data.l1||'').trim().slice(0,40)||st.hero.l1,l2:(data.l2||'').trim().slice(0,40)||st.hero.l2,sub:(data.sub||'').trim().slice(0,120),body:(data.body||'').trim().slice(0,300),cta1:(data.cta1||'Explore').trim().slice(0,30),cta2:(data.cta2||'Dashboard').trim().slice(0,30)};
+   st.ticker=(data.ticker||st.ticker).slice(0,160);
+   st.intro={statement:(data.introStatement||'').trim().slice(0,140)||st.intro.statement,body:(data.introBody||'').trim().slice(0,400)};
+   st.about={title:(data.aboutTitle||'').trim().slice(0,140)||st.about.title,body:(data.aboutBody||'').trim().slice(0,800)||st.about.body,facts:data.facts};
+   st.experience={title:(data.expTitle||'').trim().slice(0,60)||st.experience.title,body:(data.expBody||'').trim().slice(0,240)};
+   audit(u.id,u.username,'settings.homepage','settings','homepage','Public copy updated');saveDB();},
+ updateSettings(u,data){requirePerm(u,'settings');
+   const st=db.settings;
+   const h=parseInt(data.sessionHours,10); if(h>=1&&h<=24*365)st.sessionHours=h;
+   const pp=parseInt(data.itemsPerPage,10); if(pp>=4&&pp<=48)st.itemsPerPage=pp;
+   st.allowRegistration=!!data.allowRegistration;
+   audit(u.id,u.username,'settings.general','settings','general',`timed-session=${st.sessionHours}h, registration=${st.allowRegistration}`);saveDB();},
+ addMedia(u,m){requirePerm(u,'media_manage');
+   if(!m.type.startsWith('image/'))throw new Error('Only image files can be uploaded.');
+   if(m.size>400*1024)throw new Error('Images must be under 400 KB.');
+   const used=db.media.reduce((s,x)=>s+x.dataUrl.length,0);
+   if(used+m.dataUrl.length>3.5*1024*1024)throw new Error('Media library is full (3.5 MB local limit). Remove items first.');
+   const it={id:uid('m'),name:(m.name||'image').slice(0,60),type:m.type,size:m.size,dataUrl:m.dataUrl,createdAt:now()};
+   db.media.unshift(it);audit(u.id,u.username,'media.upload','media',it.id,it.name);saveDB();return it;},
+ deleteMedia(u,id){requirePerm(u,'media_manage');
+   const m=db.media.find(x=>x.id===id); if(!m)return;
+   db.media=db.media.filter(x=>x.id!==id);
+   if(db.settings.logoMediaId===id)db.settings.logoMediaId=null;
+   audit(u.id,u.username,'media.delete','media',id,m.name);saveDB();},
+ clearLogs(u){requirePerm(u,'logs_view');
+   db.auditLogs=[{id:uid('l'),actorId:u.id,actorName:u.username,action:'logs.clear',entityType:'system',entityId:'logs',meta:'Audit trail cleared',createdAt:now()}];saveDB();},
+ importData(u,obj){requirePerm(u,'settings');
+   if(!obj||obj.version!==1||!Array.isArray(obj.users)||!obj.users.length||!Array.isArray(obj.websites)||!Array.isArray(obj.projects))throw new Error('This file is not a valid UNFOTABLE backup.');
+   if(!obj.users.every(x=>x.username&&x.passwordHash&&x.role))throw new Error('Backup user records are incomplete.');
+   const curToken=LS.get(SESSKEY),curId=S.user?S.user.id:null;
+   db=repairDB(obj);saveDB();
+   if(curToken&&curId&&db.users.some(x=>x.id===curId)){db.sessions.push({token:curToken,userId:curId,createdAt:now(),expiresAt:-1});saveDB();S.user=db.users.find(x=>x.id===curId);}
+   else{LS.del(SESSKEY);S.user=null;S.session=null;}
+   audit(S.user?S.user.id:null,S.user?S.user.username:'unknown','data.import','system','db',`Imported backup (${db.websites.length} websites, ${db.users.length} users)`);saveDB();},
+ resetAll(u){requirePerm(u,'settings');LS.del(SESSKEY);LS.del(DBKEY);db=seedDB();saveDB();}
+};
+
+/* ---------------- misc helpers ---------------- */
+const fmtDate=ts=>new Date(ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+const fmtDT=ts=>new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+function ago(ts){const s=(now()-ts)/1000;if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';if(s<7*86400)return Math.floor(s/86400)+'d ago';return fmtDate(ts);}
+function safeOpen(url){try{const u=new URL(url);if(u.protocol==='http:'||u.protocol==='https:'){window.open(u.href,'_blank','noopener,noreferrer');}else toast('Only http(s) links can be opened.','error');}catch(e){toast('That link is not a valid URL.','error');}}
+const mediaUrl=id=>{const m=db.media.find(x=>x.id===id);return m?m.dataUrl:'';};
+
+/* ---------------- toasts / modals (stacked) ---------------- */
+function toast(msg,kind='info'){
+  const t=document.createElement('div');t.className=`toast ${kind}`;
+  t.innerHTML=`${ic(kind==='error'?'alert':kind==='success'?'check':'info')}<div>${esc(msg)}</div>`;
+  $('#toasts').appendChild(t);
+  setTimeout(()=>{t.classList.add('out');setTimeout(()=>t.remove(),350);},4200);
+}
+const modalStack=[];
+function openModal({title,body,foot,wide,slim,static:isStatic=false,onMount,onClose}={}){
+  const root=document.createElement('div');
+  root.className='mroot';
+  root.innerHTML=`<div class="mback" data-mclose></div>
+   <div class="mpanel ${wide?'wide':''} ${slim?'slim':''}" role="dialog" aria-modal="true" aria-label="${esc(title)}" tabindex="-1">
+     <div class="mhead"><h3>${esc(title)}</h3><button class="ibtn" data-mclose aria-label="Close dialog">${ic('x')}</button></div>
+     <div class="mbody">${body}</div>${foot?`<div class="mfoot">${foot}</div>`:''}</div>`;
+  document.body.appendChild(root);
+  document.body.style.overflow='hidden';
+  const rec={root,prevFocus:document.activeElement,static:isStatic,onClose};
+  modalStack.push(rec);
+  root.style.zIndex=String(200+modalStack.length);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>root.classList.add('open')));
+  root.querySelectorAll('[data-mclose]').forEach(b=>b.addEventListener('click',()=>{if(!isStatic)closeModal(root);}));
+  const panel=$('.mpanel',root);
+  panel.addEventListener('keydown',e=>{
+    if(e.key==='Tab'){const f=$$('button,input,select,textarea,a[href]',panel).filter(x=>!x.disabled);
+      if(!f.length)return;const first=f[0],last=f[f.length-1];
+      if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault();}
+      else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault();}}
+  });
+  (panel.querySelector('[autofocus]')||panel).focus();
+  if(onMount)onMount(panel);
+  return{close:()=>closeModal(root),panel,prevFocus:rec.prevFocus};
+}
+function closeModal(target){
+  let rec=null;
+  if(target&&target.nodeType===1&&modalStack.some(r=>r.root===target))rec=modalStack.find(r=>r.root===target);
+  else if(modalStack.length)rec=modalStack[modalStack.length-1];
+  if(!rec)return;
+  modalStack.splice(modalStack.indexOf(rec),1);
+  rec.root.classList.remove('open');
+  setTimeout(()=>rec.root.remove(),300);
+  if(!modalStack.length)document.body.style.overflow='';
+  if(rec.onClose)try{rec.onClose();}catch(e){}
+  if(rec.prevFocus&&rec.prevFocus.focus)try{rec.prevFocus.focus();}catch(e){}
+}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modalStack.length&&!modalStack[modalStack.length-1].static)closeModal();});
+function confirmDialog({title,message,confirmLabel='Confirm',danger=false}){
+  return new Promise(res=>{
+    let done=false;const fin=v=>{if(!done){done=true;res(v);}};
+    const m=openModal({title,slim:true,body:`<p style="color:var(--muted);font-size:14px">${message}</p>`,
+      foot:`<button class="btn ghost sm" data-cx="0">Cancel</button><button class="btn sm ${danger?'danger':''}" data-cx="1" autofocus>${esc(confirmLabel)}</button>`,
+      onClose:()=>fin(false)});
+    m.panel.querySelectorAll('[data-cx]').forEach(b=>b.addEventListener('click',()=>{fin(b.dataset.cx==='1');m.close();}));
+  });
 }
 
-async function init() {
-  $("#ft-year").textContent = String(new Date().getFullYear());
-  await seed();
-  $("#modal-mask").addEventListener("click", e => { if (e.target.id === "modal-mask") A.modalCancel(); });
-  $("#modal-ok").addEventListener("click", () => A.modalOk());
-  render();
+/* ---------------- theme & identity ---------------- */
+const ACCENTS=[
+ {n:'Fern',v:'#7FB069',l:'#4E8A4A',ink:'#0F1A0B'},
+ {n:'Copper',v:'#D98E4A',l:'#B06A2C',ink:'#1D130A'},
+ {n:'Bone',v:'#E3D9C2',l:'#8A7F63',ink:'#17150C'},
+ {n:'Moss',v:'#A3B18A',l:'#66754F',ink:'#141709'},
+ {n:'Steel',v:'#9DB2C4',l:'#5F7A93',ink:'#0E1418'}];
+function applyTheme(t){document.documentElement.dataset.theme=t;LS.set('unfotable_theme',t);}
+function applyIdentity(){
+  const st=db.settings, light=document.documentElement.dataset.theme==='light';
+  const a=ACCENTS.find(x=>x.v===st.accent)||ACCENTS[0];
+  document.documentElement.style.setProperty('--accent', light?(a.l||a.v):a.v);
+  document.documentElement.style.setProperty('--accent-ink', light?'#F5F2E7':(a.ink||'#14130D'));
+  document.querySelector('meta[name="theme-color"]').content=light?'#F1EDE2':'#131210';
+}
+function renderNav(){
+  const st=db.settings,logged=S.user;
+  const links=[['s-hero',st.nav.home],['s-collection',st.nav.websites],['s-projects',st.nav.projects],['s-about',st.nav.about]];
+  const logo=st.logoMediaId?`<img src="${mediaUrl(st.logoMediaId)}" alt="Logo">`:`<span class="mono">${esc(st.monogram)}</span>`;
+  $('#nav').innerHTML=`<div class="nav-in">
+    <a href="#/" class="brand" data-scroll="s-hero" aria-label="${esc(st.siteTitle)} — home">${logo}<span>${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
+    <nav class="nav-links" aria-label="Primary">${links.map(([id,l])=>`<a href="#/" class="nav-link" data-scroll="${id}">${esc(l)}</a>`).join('')}</nav>
+    <div class="nav-right">
+      <a class="tgl" href="${GH_URL}" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub — ${GH_URL.replace('https://','')}">${ic('github','sm')}</a>
+      <button class="tgl" data-action="theme" aria-label="Toggle color theme">${ic('sun','ic-sun')}<span class="ic-moon">${ic('moon')}</span></button>
+      ${logged?`<a class="btn ghost sm" href="#/dashboard">${ic('grid')}Dashboard</a>`:`<a class="btn ghost sm" href="#/login">${ic('lock')}Login</a>`}
+      <button class="burger" data-action="menu" aria-label="Open menu" aria-expanded="false">${ic('menu')}</button>
+    </div></div>`;
+  $('#mmenu').innerHTML=links.map(([id,l])=>`<a href="#/" data-scroll="${id}">${esc(l)}${ic('upright')}</a>`).join('')
+    +(logged?`<a href="#/dashboard">Dashboard${ic('upright')}</a>`:`<a href="#/login">Login${ic('upright')}</a>`)
+    +`<div class="mmeta"><span>${esc(st.siteTitle)}<span class="dot" style="margin:0 .5em 0 .3em"></span>HQ</span><a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')}GitHub</a></div>`;
+}
+document.addEventListener('click',e=>{
+  const sc=e.target.closest('[data-scroll]');
+  if(sc){e.preventDefault();document.body.classList.remove('menu-open');
+    const el=document.getElementById(sc.dataset.scroll);
+    if(el)el.scrollIntoView({behavior:RM?'auto':'smooth'});return;}
+  const ta=e.target.closest('[data-action]');
+  if(!ta)return;
+  const{action,id}=ta.dataset;
+  if(action==='theme'){applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark');applyIdentity();const ft=$('#fTheme');if(ft)ft.textContent=document.documentElement.dataset.theme;}
+  if(action==='menu'){const open=document.body.classList.toggle('menu-open');ta.setAttribute('aria-expanded',open);}
+  if(action==='fav')api.toggleFav(S.user,id),renderDirectoryList();
+  if(action==='wdel'){confirmDialog({title:'Delete website',message:`Remove <b>${esc(db.websites.find(w=>w.id===id)?.title||'')}</b> from the directory? This cannot be undone.`,confirmLabel:'Delete',danger:true}).then(y=>{if(y){api.deleteWebsite(S.user,id);toast('Website deleted.','success');renderDirectoryList();}});}
+  if(action==='wedit')openWebsiteEditor(id);
+  if(action==='openSite')safeOpen(ta.dataset.url);
+});
+window.addEventListener('scroll',()=>{$('#nav').classList.toggle('scrolled',scrollY>24);},{passive:true});
+
+/* ================================================================
+   PUBLIC HOME
+   ================================================================ */
+function heroArt(){
+ return `<svg viewBox="0 0 640 640" role="img" aria-label="Abstract sketch of a connected system — an orbited sphere, paper plane, pencil and annotated frames.">
+  <defs><pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><line x1="0" y1="0" x2="0" y2="7" stroke="var(--line-strong)" stroke-width="1"/></pattern></defs>
+  <g data-depth="6"><circle cx="330" cy="330" r="250" fill="none" stroke="var(--line-strong)" stroke-dasharray="3 8"/></g>
+  <g data-depth="10"><ellipse cx="330" cy="330" rx="298" ry="106" transform="rotate(-16 330 330)" fill="none" stroke="var(--line-strong)" stroke-dasharray="1 7" opacity=".8"/>
+  <circle r="5" fill="var(--accent)"><animateMotion dur="18s" repeatCount="indefinite" path="M580,330 a250,250 0 1,0 -500,0 a250,250 0 1,0 500,0"/></circle></g>
+  <g class="hl-sphere" data-depth="16">
+    <circle cx="330" cy="330" r="88" fill="var(--bg2)" stroke="var(--ink-dim)" stroke-width="1.3"/>
+    <circle cx="330" cy="330" r="86" fill="url(#hatch)" opacity=".35"/>
+    <path d="M258 306 a88 88 0 0 1 144 -22" fill="none" stroke="var(--ink-dim)" stroke-width="1.6"/>
+    <ellipse cx="330" cy="330" rx="88" ry="24" fill="none" stroke="var(--line-strong)" stroke-dasharray="2 5"/>
+    <circle cx="404" cy="290" r="3.4" fill="var(--accent)"/></g>
+  <g data-depth="12"><path d="M330 330 L470 236 M330 330 L452 330 M330 330 L330 190" stroke="var(--line-strong)" stroke-dasharray="1 6" fill="none"/>
+    <g transform="translate(452,120)"><polygon points="0,20 58,0 26,28" fill="var(--bg)" stroke="var(--ink-dim)" stroke-width="1.3"/><polygon points="26,28 58,0 30,46" fill="var(--bg)" stroke="var(--ink-dim)" stroke-width="1.3" opacity=".65"/><path d="M0 20 L58 0" stroke="var(--line-strong)" stroke-dasharray="2 5"/></g></g>
+  <g class="hl-cube" data-depth="8" transform="translate(118,128)">
+    <polygon points="30,0 60,15 30,30 0,15" fill="none" stroke="var(--ink-dim)" stroke-width="1.2"/>
+    <polygon points="0,15 30,30 30,66 0,51" fill="none" stroke="var(--ink-dim)" stroke-width="1.2"/>
+    <polygon points="60,15 30,30 30,66 60,51" fill="url(#hatch)" stroke="var(--ink-dim)" stroke-width="1.2" opacity=".8"/></g>
+  <g data-depth="14" transform="translate(468,404) rotate(38)">
+    <rect x="0" y="0" width="92" height="13" rx="2" fill="var(--bg)" stroke="var(--ink-dim)" stroke-width="1.2"/>
+    <line x1="20" y1="0" x2="20" y2="13" stroke="var(--line-strong)"/><line x1="24" y1="0" x2="24" y2="13" stroke="var(--line-strong)"/>
+    <polygon points="92,0 106,6.5 92,13" fill="var(--bg)" stroke="var(--ink-dim)" stroke-width="1.2"/><polygon points="100,3.5 106,6.5 100,9.5" fill="var(--ink-dim)"/></g>
+  <g data-depth="7"><rect x="66" y="466" width="118" height="84" fill="var(--paper)" stroke="var(--ink-dim)" stroke-width="1.1"/>
+    <line x1="82" y1="492" x2="168" y2="492" stroke="var(--line-strong)"/><line x1="82" y1="508" x2="150" y2="508" stroke="var(--line-strong)"/><line x1="82" y1="524" x2="160" y2="524" stroke="var(--line-strong)"/>
+    <circle cx="160" cy="486" r="8" fill="none" stroke="var(--accent)" stroke-width="1.2"/>
+    <rect x="112" y="458" width="30" height="9" fill="var(--ink)" opacity=".07" transform="rotate(-4 112 458)"/>
+    <text x="66" y="572" font-family="Manrope,sans-serif" font-size="10" letter-spacing="2" fill="var(--faint)">FIG. A — DIRECTORY</text></g>
+  <g data-depth="9"><rect x="236" y="66" width="96" height="62" fill="none" stroke="var(--ink-dim)" stroke-width="1.1"/>
+    <polyline points="248,112 268,94 288,102 316,78" fill="none" stroke="var(--accent)" stroke-width="1.3"/>
+    <text x="236" y="146" font-family="Manrope,sans-serif" font-size="10" letter-spacing="2" fill="var(--faint)">FIG. 0 — INDEX</text></g>
+  <g data-depth="5" stroke="var(--ink-dim)" stroke-width="1.2"><path d="M96 306 h12 M102 300 v12"/><path d="M560 260 h12 M566 254 v12" stroke="var(--accent)"/><path d="M300 596 h12 M306 590 v12" opacity=".6"/></g>
+  <g data-depth="11"><text x="120" y="252" font-family="'Playfair Display',serif" font-style="italic" font-size="17" fill="var(--muted)">everything links back</text>
+    <path d="M236 262 Q 276 292 300 322" fill="none" stroke="var(--muted)" stroke-width="1"/><path d="M295 310 L301 324 L288 320" fill="none" stroke="var(--muted)" stroke-width="1"/></g>
+ </svg>`;
+}
+function miniObj(){return `<svg width="150" height="150" viewBox="0 0 150 150" aria-hidden="true" data-parallax="0.6">
+  <circle cx="75" cy="75" r="58" fill="none" stroke="var(--line-strong)" stroke-dasharray="2 6"/>
+  <circle cx="75" cy="75" r="30" fill="var(--paper)" stroke="var(--ink-dim)"/>
+  <ellipse cx="75" cy="75" rx="30" ry="9" fill="none" stroke="var(--line-strong)" stroke-dasharray="2 4"/>
+  <circle cx="75" cy="17" r="3.5" fill="var(--accent)"/><path d="M124 40 h10 M129 35 v10" stroke="var(--ink-dim)" stroke-width="1.1"/></svg>`;}
+
+function renderHome(){
+  const st=db.settings;
+  $('#chapters').innerHTML=[['01','Introduction'],['02','Connection'],['03','Collection'],['04','Control'],['05','Experience']].map(([n,l])=>`<div class="chap" data-ch="${n}"><span class="n">${n}</span><span class="l">${l}</span></div>`).join('');
+  const sites=db.websites.filter(w=>w.isPublished);
+  const projects=db.projects.filter(p=>p.status==='published');
+  const tickerWords=st.ticker.split('|').map(w=>w.trim()).filter(Boolean);
+  const tkSeg=tickerWords.map(w=>`<span>${esc(w)}</span><span class="o">${esc(w)}</span>`).join('<span class="tk-dot"></span>');
+  const facts=st.about.facts||[];
+  $('#view').innerHTML=`
+  <!-- HERO — centered -->
+  <section class="hero" id="s-hero">
+   <div class="wrap hero-grid">
+    <div class="eyebrow hero-fade d1">Est. MMXXV — A personal headquarters</div>
+    <h1><span class="hline"><span class="hline-in">${esc(st.hero.l1)}</span></span>
+        <span class="hline"><span class="hline-in"><span class="it">${esc(st.hero.l2)}</span></span></span></h1>
+    <p class="hero-sub hero-fade d2"><strong>${esc(st.hero.sub)}</strong> ${esc(st.hero.body)}</p>
+    <div class="hero-cta hero-fade d3">
+      <span class="mg" data-magnetic><a href="#/" class="btn" data-scroll="s-collection">${esc(st.hero.cta1)}${ic('upright')}</a></span>
+      <a href="${S.user?'#/dashboard':'#/login'}" class="link-arrow">${esc(st.hero.cta2)}${ic('right')}</a>
+    </div>
+    <div class="hero-art hero-fade d2" id="heroArt">${heroArt()}</div>
+   </div>
+   <div class="scroll-ind" aria-hidden="true"><span>Scroll</span><div class="track"></div></div></section>
+
+  <!-- 01 INTRODUCTION -->
+  <section class="sec" id="s-intro"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">01</span><span class="tag">Introduction</span><span class="rl"></span></div>
+    <h2 class="sec-title split" style="max-width:820px;margin:0 auto;text-align:center">${esc(st.intro.statement)}</h2>
+    <div class="intro-cols">
+      <p class="intro-body" data-reveal>${esc(st.intro.body)}</p>
+      <div data-reveal>${miniObj()}</div>
+    </div>
+  </div></section>
+  <div class="ticker" aria-hidden="true"><div class="tk-track">${tkSeg}<span class="tk-dot"></span></div><div class="tk-track">${tkSeg}<span class="tk-dot"></span></div></div>
+
+  <!-- 02 CONNECTION -->
+  <section class="sec" id="s-connect"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">02</span><span class="tag">Connection</span><span class="rl"></span></div>
+    <div style="text-align:center;max-width:680px;margin:0 auto 46px">
+      <h2 class="sec-title">Everything, <em>connected.</em></h2>
+      <p class="sec-sub" style="margin:18px auto 0" data-reveal>${esc(st.connect.body)}</p>
+    </div>
+    <div class="cn-wrap cn" id="cnDiagram" data-reveal>
+      <div class="cn-meta"><span>Fig. 01 — The constellation</span><span>${sites.length} live node${sites.length===1?'':'s'}</span></div>
+      ${buildDiagram(sites)}
+    </div>
+  </div></section>
+
+  <!-- 03 COLLECTION: DIRECTORY -->
+  <section class="sec" id="s-collection"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">03</span><span class="tag">Collection</span><span class="rl"></span></div>
+    <div style="text-align:center;max-width:680px;margin:0 auto">
+      <h2 class="sec-title">The <em>Directory.</em></h2>
+      <p class="sec-sub" style="margin:18px auto 0" data-reveal>${esc(st.directory.body)}</p>
+    </div>
+    <div class="dir-controls" data-reveal>
+      <label class="search">${ic('search')}<input type="search" id="dirSearch" placeholder="Search the directory\u2026" value="${esc(S.home.q)}" aria-label="Search websites"></label>
+      <select class="sortsel" id="dirSort" aria-label="Sort websites">
+        <option value="recent">Recently added</option><option value="title">Title A\u2013Z</option><option value="old">Oldest first</option><option value="fav">Favorites first</option>
+      </select>
+    </div>
+    <div class="chips" id="dirChips" role="group" aria-label="Filter by category"></div>
+    <div class="dir-list" id="dirList"></div>
+  </div></section>
+
+  <!-- 03b PROJECT GALLERY -->
+  <section class="sec" id="s-projects"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">03\u00B7B</span><span class="tag">Gallery</span><span class="rl"></span></div>
+    <div style="text-align:center;max-width:680px;margin:0 auto 50px">
+      <h2 class="sec-title">Project <em>Gallery.</em></h2>
+      <p class="sec-sub" style="margin:18px auto 0" data-reveal>${esc(st.projectsSec.body)}</p>
+    </div>
+    <div class="pgrid">${projects.map(projectCard).join('')||emptyBlock('No published projects yet','The workshop is busy. Check back soon.')}</div>
+  </div></section>
+
+  <!-- 04 CONTROL -->
+  <section class="sec" id="s-control"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">04</span><span class="tag">Control</span><span class="rl"></span></div>
+    <div style="text-align:center;max-width:680px;margin:0 auto 50px">
+      <h2 class="sec-title">One dashboard.<br><em>Total control.</em></h2>
+      <p class="sec-sub" style="margin:18px auto 0" data-reveal>A private management surface for the whole platform — content, people, appearance, and the audit trail behind it.</p>
+    </div>
+    <div class="ctl-grid">
+      <div data-reveal-group>
+        ${st.control.features.map(([icn,t,d])=>`<div class="feat" data-reveal><span class="fi">${ic(icn)}</span><div><h4>${esc(t)}</h4><p>${esc(d)}</p></div></div>`).join('')}
+        <div style="margin-top:34px"><span class="mg" data-magnetic><a class="btn" href="${S.user?'#/dashboard':'#/login'}">Enter Dashboard${ic('upright')}</a></span></div>
+      </div>
+      <div class="ctl-frame" data-reveal aria-hidden="true">
+        <div class="ctl-bar"><i></i><i></i><i></i><span>unfotable — dashboard</span></div>
+        <div class="ctl-body"><div class="ctl-side"><i class="on"></i><i></i><i></i><i></i></div>
+          <div class="ctl-main">
+            <div class="ctl-stats">
+              <div><b>${db.websites.length}</b><span>Websites</span></div>
+              <div><b>${db.projects.length}</b><span>Projects</span></div>
+              <div><b>${db.users.length}</b><span>People</span></div>
+            </div>
+            ${db.websites.slice(0,3).map(w=>`<div class="ctl-row"><i></i><b>${esc(w.title)}</b><span>${esc(catName(w.categoryId))}</span></div>`).join('')||'<div class="ctl-row">Directory awaiting first entry</div>'}
+          </div></div></div>
+    </div>
+  </div></section>
+
+  <!-- ABOUT -->
+  <section class="sec" id="s-about"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">\u2014</span><span class="tag">About</span><span class="rl"></span></div>
+    <div class="about-grid">
+      <div>
+        <h2 class="about-title split">${esc(st.about.title)}</h2>
+        <p class="about-body" data-reveal>${esc(st.about.body)}</p>
+      </div>
+      <div>
+        <div class="colophon" data-reveal>${facts.map(([k,v])=>`<div class="colo-row"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div>
+        <div class="about-img" data-reveal><img src="https://picsum.photos/seed/unfot-about/520/650.jpg" alt="Studio atmosphere — workspace of the author" loading="lazy" width="520" height="650"></div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- 05 EXPERIENCE -->
+  <section class="sec exp" id="s-experience"><div class="wrap">
+    <div class="rule-head" data-reveal><span class="rl"></span><span class="idx">05</span><span class="tag">Experience</span><span class="rl"></span></div>
+    <h2 class="split">${esc(st.experience.title)}</h2>
+    <p data-reveal>${esc(st.experience.body)}</p>
+    <div class="hero-cta" data-reveal>
+      <span class="mg" data-magnetic><a class="btn" href="#/login">Enter Dashboard${ic('upright')}</a></span>
+      <a class="link-arrow" href="${GH_URL}" target="_blank" rel="noopener noreferrer">View on GitHub${ic('github')}</a>
+    </div>
+  </div></section>
+
+  <!-- FOOTER -->
+  <footer><div class="wrap">
+    <div class="f-top">
+      <div><a href="#/" class="brand" data-scroll="s-hero">${st.logoMediaId?`<img src="${mediaUrl(st.logoMediaId)}" alt="Logo">`:`<span class="mono">${esc(st.monogram)}</span>`}<span>${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
+        <p class="f-note"><b class="dot" style="margin:0 .5em 0 0;transform:translateY(-.02em)"></b><span>${esc(st.footer.note)}</span></p></div>
+      <div class="f-col"><h5>Navigate</h5>${[['s-hero',st.nav.home],['s-collection',st.nav.websites],['s-projects',st.nav.projects],['s-about',st.nav.about]].map(([id,l])=>`<a href="#/" data-scroll="${id}">${esc(l)}</a>`).join('')}</div>
+      <div class="f-col"><h5>Elsewhere</h5>${st.footer.socials.map(s=>s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${ic(s.key in I?s.key:'globe')}${esc(s.label)}</a>`:'').join('')}
+        <button data-action="theme"><span class="ic-sun">${ic('sun')}</span><span class="ic-moon">${ic('moon')}</span>Theme: <span id="fTheme">${document.documentElement.dataset.theme}</span></button></div>
+    </div>
+    <div class="f-word" aria-hidden="true">${esc(st.siteTitle)}<span class="dot"></span></div>
+    <div class="f-bottom">
+      <span>\u00A9 ${new Date().getFullYear()} Devanshu \u00B7 ${esc(st.siteTitle)}. All rights reserved.</span>
+      <a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')}github.com/UNFOTABLE01/unfotable</a>
+      <button class="to-top" data-action="top" aria-label="Back to top">${ic('up')}</button>
+    </div>
+  </div></footer>`;
+  // wire home-specific controls
+  $('#dirSort').value=S.home.sort;
+  $('#dirSort').addEventListener('change',e=>{S.home.sort=e.target.value;renderDirectoryList();});
+  $('#dirSearch').addEventListener('input',debounce(e=>{S.home.q=e.target.value;renderDirectoryList();},200));
+  if(RM)$$('animateMotion').forEach(a=>a.remove());
+  renderDirChips(); renderDirectoryList(); bindFloatPreview(); revealInit($('#view')); chapterRail(); initMotion();
+  document.querySelectorAll('[data-action="top"]').forEach(b=>b.addEventListener('click',()=>window.scrollTo({top:0,behavior:RM?'auto':'smooth'})));
+}
+const debounce=(fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};};
+const catName=id=>(db.categories.find(c=>c.id===id)||{}).name||'Other';
+function renderDirChips(){
+  const counts={all:db.websites.filter(w=>w.isPublished).length};
+  db.categories.forEach(c=>counts[c.id]=db.websites.filter(w=>w.isPublished&&w.categoryId===c.id).length);
+  $('#dirChips').innerHTML=[['all','All'],...db.categories.map(c=>[c.id,c.name])]
+    .filter(([id])=>counts[id]>0||id==='all'||can(S.user,'websites_manage'))
+    .map(([id,n])=>`<button class="chip ${S.home.cat===id?'on':''}" data-cat="${id}">${esc(n)} <span style="opacity:.55">${counts[id]||0}</span></button>`).join('');
+  $$('#dirChips .chip').forEach(b=>b.addEventListener('click',()=>{S.home.cat=b.dataset.cat;renderDirChips();renderDirectoryList();}));
+}
+function renderDirectoryList(){
+  const list=$('#dirList'); if(!list)return;
+  let items=db.websites.filter(w=>w.isPublished||can(S.user,'websites_manage'));
+  if(S.home.cat!=='all')items=items.filter(w=>w.categoryId===S.home.cat);
+  const q=S.home.q.trim().toLowerCase();
+  if(q)items=items.filter(w=>(w.title+' '+w.description+' '+w.tags.join(' ')+' '+catName(w.categoryId)).toLowerCase().includes(q));
+  const sorters={recent:(a,b)=>b.createdAt-a.createdAt,old:(a,b)=>a.createdAt-b.createdAt,title:(a,b)=>a.title.localeCompare(b.title),fav:(a,b)=>(b.isFavorite-a.isFavorite)||(b.createdAt-a.createdAt)};
+  items=[...items].sort(sorters[S.home.sort]||sorters.recent);
+  const manage=can(S.user,'websites_manage');
+  if(!items.length){
+    list.innerHTML=`<div class="dir-empty">${ic('orbit','lg')}<h3>${q||S.home.cat!=='all'?'Nothing matches that search':'The directory is being curated'}</h3>
+      <p>${q||S.home.cat!=='all'?'Try a different term or clear the filters.':'Check back soon — the first entries are on their way.'}</p>
+      ${(q||S.home.cat!=='all')?'<button class="btn ghost sm" id="dirClear">Clear filters</button>':(manage?'<a class="btn sm" href="#/dashboard/websites">Add the first website</a>':'')}</div>`;
+    const c=$('#dirClear');if(c)c.addEventListener('click',()=>{S.home={q:'',cat:'all',sort:S.home.sort};$('#dirSearch').value='';renderDirChips();renderDirectoryList();});
+    return;
+  }
+  list.innerHTML=items.map((w,i)=>`
+    <article class="wrow" data-id="${w.id}" ${w.thumbnail?`data-thumb="${esc(w.thumbnail)}"`:''} data-url="${esc(w.url)}">
+      <span class="no">${String(i+1).padStart(2,'0')}</span>
+      <div class="th">${w.thumbnail?`<img src="${esc(w.thumbnail)}" alt="Thumbnail of ${esc(w.title)}" loading="lazy" width="172" height="116">`:`<span class="mono-th">${esc(w.title[0]||'U')}</span>`}</div>
+      <div><h3>${esc(w.title)}${w.isFavorite?`<span class="fav" title="Favorite">${ic('star','sm')}</span>`:''}${!w.isPublished?'<span class="tag" style="color:var(--warn);border-color:var(--warn)">Hidden</span>':''}</h3>
+        <p class="ds">${esc(w.description)}</p>
+        <div class="tags"><span class="tag cat">${esc(catName(w.categoryId))}</span>${w.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div>
+      <div class="wmeta"><span>Added ${fmtDate(w.createdAt)}</span><span class="status st-${w.status}">${w.status}</span></div>
+      <div class="wacts">
+        ${manage?`<button class="ibtn ${w.isFavorite?'on':''}" data-action="fav" data-id="${w.id}" aria-label="Toggle favorite">${ic('star','sm')}</button>`:''}
+        <button class="ibtn acc" data-action="openSite" data-url="${esc(w.url)}" aria-label="Open ${esc(w.title)}">${ic('upright','sm')}</button>
+        ${manage?`<button class="ibtn" data-action="wedit" data-id="${w.id}" aria-label="Edit ${esc(w.title)}">${ic('pencil','sm')}</button>
+        <button class="ibtn dng" data-action="wdel" data-id="${w.id}" aria-label="Delete ${esc(w.title)}">${ic('trash','sm')}</button>`:''}
+      </div></article>`).join('');
+  list.querySelectorAll('.wrow').forEach(r=>r.addEventListener('click',e=>{if(e.target.closest('button'))return;safeOpen(r.dataset.url);}));
+  $$('.wrow',list).forEach((r,i)=>{r.style.opacity='0';r.style.transform='translateY(18px)';r.style.transition=`opacity .7s var(--e) ${i*0.06}s, transform .7s var(--e) ${i*0.06}s`;});
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{list.classList.add('in');$$('.wrow',list).forEach(r=>{r.style.opacity='1';r.style.transform='none';});}));
+}
+function projectCard(p,i=0){
+  const stMap={published:['Published','ok'],draft:['In progress','warn'],archived:['Archived','mut']};
+  return `<article class="pcard" data-id="${p.id}" data-reveal style="transition-delay:${(i%2)*0.08}s">
+    <div class="pm">${p.coverImage?`<img src="${esc(p.coverImage)}" alt="Cover of ${esc(p.title)}" loading="lazy">`:`<div style="width:100%;height:100%;display:grid;place-items:center;font-family:var(--serif);font-size:40px;color:var(--faint)">${esc(p.title[0])}</div>`}<span class="pst">${stMap[p.status][0]}</span></div>
+    <div class="pb"><div class="pt"><h3>${esc(p.title)}</h3><span class="pd">${fmtDate(p.createdAt)}</span></div>
+      <p>${esc(p.description)}</p>
+      <div class="stack">${p.technologies.slice(0,5).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+      <div class="plinks">
+        ${p.demoUrl?`<button data-open="${esc(p.demoUrl)}">${ic('ext','sm')}Live demo</button>`:''}
+        ${p.sourceUrl?`<button data-open="${esc(p.sourceUrl)}">${ic('github','sm')}Source</button>`:''}
+        <button data-open="detail:${p.id}" style="margin-left:auto">${ic('plus','sm')}Details</button>
+      </div></div></article>`;
+}
+function emptyBlock(t,s){return `<div class="dir-empty" style="grid-column:span 12">${ic('orbit','lg')}<h3>${esc(t)}</h3><p>${esc(s)}</p></div>`;}
+document.addEventListener('click',e=>{
+  const o=e.target.closest('[data-open]');
+  if(!o)return;e.stopPropagation();
+  const v=o.dataset.open;
+  if(v.startsWith('detail:'))openProjectDetail(v.slice(7));else safeOpen(v);
+});
+function openProjectDetail(id){
+  const p=db.projects.find(x=>x.id===id); if(!p)return;
+  const m=openModal({title:p.title,wide:true,body:`
+    ${p.coverImage?`<img class="thumb-prev" style="aspect-ratio:16/8" src="${esc(p.coverImage)}" alt="Cover of ${esc(p.title)}">`:''}
+    <p style="color:var(--muted);margin-bottom:16px">${esc(p.description)}</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px">${p.technologies.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>
+    <div class="kv"><span>Status</span><b style="text-transform:capitalize">${esc(p.status)}</b></div>
+    <div class="kv"><span>Created</span><b>${fmtDate(p.createdAt)}</b></div>
+    <div class="kv"><span>Updated</span><b>${fmtDate(p.updatedAt)}</b></div>`,
+    foot:`${p.demoUrl?`<button class="btn ghost sm" data-open="${esc(p.demoUrl)}">${ic('ext')}Live demo</button>`:''}${p.sourceUrl?`<button class="btn ghost sm" data-open="${esc(p.sourceUrl)}">${ic('github')}Source</button>`:''}<button class="btn sm" data-mclose-x>Close</button>`});
+  m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
+}
+/* ---- connection diagram (cy/H tuned so bottom labels never clip) ---- */
+function buildDiagram(sites){
+  const W=1000,H=500,cx=W/2,cy=245,n=Math.max(sites.length,4);
+  const nodes=[];
+  for(let i=0;i<n;i++){
+    const ang=(-90+i*(360/Math.min(n,7))+(i>6?180:0))*Math.PI/180;
+    const r=[168,206,178][i%3];
+    nodes.push({x:cx+Math.cos(ang)*r*1.35,y:cy+Math.sin(ang)*r*0.78,label:sites[i]?sites[i].title:'your next site',dot:!!sites[i]});
+  }
+  const paths=nodes.map((p,i)=>{
+    const mx=(cx+p.x)/2+(p.y-cy)*0.22,my=(cy+p.y)/2-(p.x-cx)*0.22;
+    const anchor=p.x<cx?'end':'start',dx=p.x<cx?-14:14;
+    return `<path class="cn-path" d="M${cx},${cy} Q${mx.toFixed(0)},${my.toFixed(0)} ${p.x.toFixed(0)},${p.y.toFixed(0)}" style="transition-delay:${i*0.12}s"></path>
+      <circle class="cn-node" cx="${p.x.toFixed(0)}" cy="${p.y.toFixed(0)}" r="5" style="transition-delay:${0.5+i*0.12}s"></circle>
+      ${p.dot?`<circle class="cn-dot" cx="${p.x.toFixed(0)}" cy="${p.y.toFixed(0)}" r="2" style="transition-delay:${0.55+i*0.12}s"></circle>`:''}
+      <text class="cn-lbl" x="${(p.x+dx).toFixed(0)}" y="${(p.y+4).toFixed(0)}" text-anchor="${anchor}" style="transition-delay:${0.65+i*0.12}s">${esc(p.label.length>22?p.label.slice(0,21)+'\u2026':p.label)}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Diagram: every website connected to the UNFOTABLE hub">
+    <circle class="cn-ring" cx="${cx}" cy="${cy}" r="46"/><circle class="cn-core" cx="${cx}" cy="${cy}" r="30"/>
+    <text class="cn-mono" x="${cx}" y="${cy+9}">U\u00B7</text>${paths}</svg>`;
+}
+/* ---- floating thumbnail preview ---- */
+function bindFloatPreview(){
+  if(!FINE||RM)return;
+  const fp=$('#floatPrev'),img=$('img',fp);
+  let tx=0,ty=0,cx=0,cy=0,raf=null,active=false;
+  const loop=()=>{cx+=(tx-cx)*0.14;cy+=(ty-cy)*0.14;fp.style.left=cx+'px';fp.style.top=cy+'px';if(active||Math.abs(tx-cx)>0.5)raf=requestAnimationFrame(loop);else raf=null;};
+  const list=$('#dirList');
+  list.addEventListener('pointermove',e=>{tx=e.clientX+26;ty=e.clientY-90;if(!raf)raf=requestAnimationFrame(loop);});
+  list.addEventListener('pointerover',e=>{const r=e.target.closest('.wrow');if(r&&r.dataset.thumb){img.src=r.dataset.thumb;fp.classList.add('on');active=true;}});
+  list.addEventListener('pointerout',e=>{if(!e.relatedTarget||!e.relatedTarget.closest?.('.wrow')){fp.classList.remove('on');active=false;}});
+}
+/* ---- chapter rail ---- */
+function chapterRail(){
+  const map={'s-intro':'01','s-connect':'02','s-collection':'03','s-projects':'03','s-control':'04','s-about':'04','s-experience':'05'};
+  const io=new IntersectionObserver(es=>es.forEach(x=>{
+    if(x.isIntersecting){const ch=map[x.target.id];$$('.chap').forEach(c=>c.classList.toggle('on',c.dataset.ch===ch));}
+  }),{rootMargin:'-42% 0px -52% 0px'});
+  Object.keys(map).forEach(id=>{const el=document.getElementById(id);if(el)io.observe(el);});
+}
+/* ---- reveals ---- */
+function wrapWords(el){
+  const walk=node=>{[...node.childNodes].forEach(ch=>{
+    if(ch.nodeType===3){
+      const frag=document.createDocumentFragment();
+      ch.textContent.split(/(\s+)/).forEach(part=>{
+        if(!part)return;
+        if(/^\s+$/.test(part)){frag.appendChild(document.createTextNode(' '));return;}
+        const w=document.createElement('span');w.className='w';const i=document.createElement('i');i.textContent=part;w.appendChild(i);frag.appendChild(w);});
+      node.replaceChild(frag,ch);
+    } else if(ch.nodeType===1&&!ch.classList.contains('w')) walk(ch);
+  });};
+  walk(el);
+}
+function revealInit(root){
+  root.querySelectorAll('.split').forEach(wrapWords);
+  const io=new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){x.target.classList.add('in');io.unobserve(x.target);}}),{threshold:.1,rootMargin:'0px 0px -6% 0px'});
+  root.querySelectorAll('[data-reveal],[data-reveal-group],.split,.cn,.about-img,.dir-list').forEach(el=>io.observe(el));
+  root.querySelectorAll('.cn-path').forEach(p=>{const L=p.getTotalLength();p.style.setProperty('--len',L);});
+}
+/* ---- GSAP enhancements ---- */
+function initMotion(){
+  if(RM||!window.gsap)return;
+  if(window.ScrollTrigger)gsap.registerPlugin(ScrollTrigger);
+  const hero=$('#heroArt');
+  if(hero&&FINE){
+    hero.parentElement.addEventListener('pointermove',e=>{
+      const r=hero.getBoundingClientRect(),dx=(e.clientX-r.left-r.width/2)/r.width,dy=(e.clientY-r.top-r.height/2)/r.height;
+      $$('#heroArt [data-depth]').forEach(l=>gsap.to(l,{x:dx*+l.dataset.depth*2.4,y:dy*+l.dataset.depth*2.4,duration:1,ease:'power2.out',overwrite:'auto'}));
+    });
+  }
+  gsap.to('.hl-sphere',{y:-12,duration:5,yoyo:true,repeat:-1,ease:'sine.inOut'});
+  gsap.to('.hl-cube',{y:-7,rotation:2,duration:6.5,yoyo:true,repeat:-1,ease:'sine.inOut'});
+  document.querySelectorAll('[data-parallax]').forEach(el=>{
+    const sp=parseFloat(el.dataset.parallax)||0.5;
+    gsap.fromTo(el,{y:sp*44},{y:sp*-44,ease:'none',scrollTrigger:{trigger:el.closest('section')||el,start:'top bottom',end:'bottom top',scrub:1}});
+  });
+  if(window.ScrollTrigger)ScrollTrigger.refresh();
+}
+function killMotion(){
+  if(window.gsap){gsap.globalTimeline.clear();if(window.ScrollTrigger)ScrollTrigger.getAll().forEach(t=>t.kill());}
+}
+function magnetic(){
+  if(!FINE||RM)return;
+  $$('[data-magnetic]').forEach(m=>{
+    const inner=m.firstElementChild;if(!inner)return;
+    m.addEventListener('pointermove',e=>{const r=m.getBoundingClientRect();
+      inner.style.transition='transform .1s';inner.style.transform=`translate(${(e.clientX-r.left-r.width/2)*0.18}px,${(e.clientY-r.top-r.height/2)*0.22}px)`;});
+    m.addEventListener('pointerleave',()=>{inner.style.transition='transform .5s var(--e)';inner.style.transform='';});
+  });
 }
 
-init();
+/* ================================================================
+   AUTH PAGES
+   ================================================================ */
+function pwStrength(v){let s=0;if(v.length>=8)s++;if(v.length>=12)s++;if(/[A-Z]/.test(v)&&/[a-z]/.test(v))s++;if(/\d/.test(v))s++;if(/[^A-Za-z0-9]/.test(v))s++;return Math.min(s,4);}
+function meterHTML(id){return `<div class="meter"><i id="${id}"></i></div><div class="hint" id="${id}t">Use at least 8 characters — mix cases, digits, symbols.</div>`;}
+function bindMeter(input,bar,txt){
+  const labels=['Very weak','Weak','Fair','Strong','Excellent'],colors=['var(--danger)','var(--danger)','var(--warn)','var(--ok)','var(--ok)'];
+  input.addEventListener('input',()=>{const s=pwStrength(input.value);bar.style.width=(s*25)+'%';bar.style.background=colors[s];txt.textContent=input.value?labels[s]:'Use at least 8 characters — mix cases, digits, symbols.';});
+}
+function fieldErr(input,msg){input.classList.add('err');const f=input.closest('.field');const e=f&&f.querySelector('.ferr');if(e){e.textContent=msg;e.classList.add('show');}}
+function clearErrs(form){form.querySelectorAll('.inp.err').forEach(i=>i.classList.remove('err'));form.querySelectorAll('.ferr.show').forEach(e=>e.classList.remove('show'));const a=form.closest('.af-box')||form;const al=a.querySelector('.alert');if(al)al.classList.remove('show');}
+function renderLogin(){
+  const st=db.settings;
+  $('#chapters').innerHTML='';
+  const reg=st.allowRegistration;
+  $('#view').innerHTML=`<div class="auth">
+    <div class="auth-brand">
+      <a href="#/" class="brand"><span class="mono">${esc(st.monogram)}</span><span>${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
+      <div>${ic('lock','lg')}<h2 style="margin-top:18px">The door to the <em>control room.</em></h2></div>
+      <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)">PBKDF2 \u00B7 hashed \u00B7 persistent sessions</div>
+    </div>
+    <div class="auth-form"><div class="af-box" id="authBox">
+      ${!db.provisioned?`<div class="prov-note">${ic('shield')}<span><b>First run:</b> no administrator exists yet. <button id="goSetup" style="color:var(--accent);font-weight:800">Provision the administrator account \u2192</button></span></div>`:''}
+      <h1>Sign in</h1><p class="sub">Authorized access to the UNFOTABLE dashboard.</p>
+      <div class="alert" id="loginAlert" role="alert"></div>
+      <form id="loginForm" novalidate>
+        <div class="field"><label for="liUser">User ID</label><input class="inp" id="liUser" autocomplete="username" autofocus></div>
+        <div class="field"><label for="liPass">Password</label>
+          <div class="pw-wrap"><input class="inp" id="liPass" type="password" autocomplete="current-password">
+          <button type="button" class="pw-eye" id="liEye" aria-label="Show password">${ic('eye','sm')}</button></div>
+          <div class="ferr"></div></div>
+        <div class="aux"><label class="cb"><input type="checkbox" id="liRem" checked><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Keep me signed in until I sign out</label></div>
+        <p class="hint" style="margin:-10px 0 22px">Sessions never expire while your account exists — they end only when you sign out, or when the account is disabled or deleted.</p>
+        <button class="btn btn-block" id="liBtn" type="submit">Sign in${ic('right')}</button>
+      </form>
+      <div class="auth-foot">${reg?`<button id="regTab">Need an account? <b style="color:var(--accent)">Create one</b></button> \u00B7 `:''}<a href="#/">Back to site</a></div>
+    </div></div></div>`;
+  $('#liEye').addEventListener('click',()=>{const p=$('#liPass');const show=p.type==='password';p.type=show?'text':'password';$('#liEye').innerHTML=ic(show?'eyeoff':'eye','sm');$('#liEye').setAttribute('aria-label',show?'Hide password':'Show password');});
+  if($('#goSetup'))$('#goSetup').addEventListener('click',()=>location.hash='#/setup');
+  $('#loginForm').addEventListener('submit',async e=>{
+    e.preventDefault();clearErrs(e.target);
+    const u=$('#liUser').value.trim(),p=$('#liPass').value,btn=$('#liBtn');
+    let bad=false;
+    if(!u){fieldErr($('#liUser'),'Enter your user ID.');bad=true;}
+    if(!p){fieldErr($('#liPass'),'Enter your password.');bad=true;}
+    if(bad)return;
+    btn.disabled=true;btn.innerHTML='<span class="spin"></span>Verifying\u2026';
+    const r=await apiLogin(u,p,$('#liRem').checked);
+    if(!r.ok){btn.disabled=false;btn.innerHTML=`Sign in${ic('right')}`;
+      const al=$('#loginAlert');al.textContent=r.error;al.classList.add('show');return;}
+    S.user=r.user;renderNav();
+    toast(`Welcome back, ${r.user.displayName}.`,'success');
+    location.hash='#/dashboard';
+  });
+  if($('#regTab'))$('#regTab').addEventListener('click',renderRegister);
+}
+function renderRegister(){
+  $('#view').innerHTML=`<div class="auth"><div class="auth-brand">
+    <a href="#/" class="brand"><span class="mono">${esc(db.settings.monogram)}</span><span>${esc(db.settings.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
+    <div>${ic('user','lg')}<h2 style="margin-top:18px">Join the <em>constellation.</em></h2></div>
+    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)">Role: USER \u00B7 read-only access</div></div>
+  <div class="auth-form"><div class="af-box">
+    <h1>Create account</h1><p class="sub">Registration is open. New accounts receive the read-only USER role.</p>
+    <div class="alert" id="regAlert" role="alert"></div>
+    <form id="regForm" novalidate>
+      <input type="text" name="website" style="position:absolute;left:-9999px" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <div class="field"><label for="rgUser">User ID</label><input class="inp" id="rgUser" autocomplete="username" autofocus><div class="ferr"></div><div class="hint">3\u201324 characters \u00B7 lowercase letters, digits, dot, underscore.</div></div>
+      <div class="field"><label for="rgName">Display name</label><input class="inp" id="rgName"><div class="ferr"></div></div>
+      <div class="field"><label for="rgPass">Password</label><input class="inp" id="rgPass" type="password">${meterHTML('rgMeter')}<div class="ferr"></div></div>
+      <button class="btn btn-block" id="rgBtn" type="submit">Create account${ic('right')}</button>
+    </form>
+    <div class="auth-foot"><button id="loginTab">Already registered? <b style="color:var(--accent)">Sign in</b></button> \u00B7 <a href="#/">Back to site</a></div>
+  </div></div></div>`;
+  bindMeter($('#rgPass'),$('#rgMeter'),$('#rgMetert'));
+  $('#loginTab').addEventListener('click',renderLogin);
+  $('#regForm').addEventListener('submit',async e=>{
+    e.preventDefault();clearErrs(e.target);
+    if(e.target.website.value){const al=$('#regAlert');al.textContent='Account created.';al.classList.add('show');setTimeout(()=>location.hash='#/login',900);return;}
+    const un=$('#rgUser').value.trim().toLowerCase(),nm=$('#rgName').value.trim(),pw=$('#rgPass').value;
+    let bad=false;
+    if(!/^[a-z0-9_.]{3,24}$/.test(un)){fieldErr($('#rgUser'),'3\u201324 chars: lowercase letters, digits, dot, underscore.');bad=true;}
+    else if(db.users.some(x=>x.username===un)){fieldErr($('#rgUser'),'That user ID is taken.');bad=true;}
+    if(!nm){fieldErr($('#rgName'),'Display name is required.');bad=true;}
+    if(pw.length<8){fieldErr($('#rgPass'),'At least 8 characters.');bad=true;}
+    if(bad)return;
+    const w=db.regWindow; if(now()-w.start>36e5){w.start=now();w.count=0;}
+    if(w.count>=3){const al=$('#regAlert');al.textContent='Registration limit reached for this hour. Try again later.';al.classList.add('show');return;}
+    const btn=$('#rgBtn');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Creating\u2026';
+    const nu={id:uid('u'),username:un,displayName:nm,passwordHash:await hashPassword(pw),role:'USER',status:'active',createdAt:now(),updatedAt:now(),lastLoginAt:null,mustChangePassword:false,isOwner:false};
+    db.users.push(nu);w.count++;saveDB();
+    audit(null,un,'user.register','user',nu.id,'Public registration (USER)');
+    toast('Account created. You can sign in now.','success');
+    location.hash='#/login';
+  });
+}
+async function renderSetup(){
+  $('#chapters').innerHTML='';
+  $('#view').innerHTML=`<div class="auth"><div class="auth-brand">
+    <a href="#/" class="brand"><span class="mono">${esc(db.settings.monogram)}</span><span>${esc(db.settings.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
+    <div>${ic('shield','lg')}<h2 style="margin-top:18px">Provision the <em>administrator.</em></h2></div>
+    <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)">One-time \u00B7 hashed \u00B7 never stored in plaintext</div></div>
+  <div class="auth-form"><div class="af-box">
+    <div class="steps"><span class="on">01 \u00B7 Provision</span><span>02 \u00B7 Sign in</span><span>03 \u00B7 Build</span></div>
+    <h1>Secure setup</h1><p class="sub">This runs once. The password you choose is hashed with PBKDF2-SHA256 (50,000 iterations) and never stored or logged in plaintext. This account becomes the permanent owner with full, unconditional control.</p>
+    <div class="alert" id="suAlert" role="alert"></div>
+    <form id="suForm" novalidate>
+      <div class="field"><label for="suUser">Administrator ID</label><input class="inp" id="suUser" value="${OWNER_ID}" readonly style="opacity:.75"><div class="hint">Locked by configuration \u2014 role: SUPER_ADMIN \u00B7 owner: full platform control, cannot be demoted, disabled, or deleted.</div></div>
+      <div class="field"><label for="suName">Display name</label><input class="inp" id="suName" value="Devanshu"><div class="ferr"></div></div>
+      <div class="field"><label for="suPass">Master password</label><input class="inp" id="suPass" type="password" autocomplete="new-password" autofocus>${meterHTML('suMeter')}<div class="ferr"></div></div>
+      <div class="field"><label for="suPass2">Confirm password</label><input class="inp" id="suPass2" type="password" autocomplete="new-password"><div class="ferr"></div></div>
+      <button class="btn btn-block" id="suBtn" type="submit">${ic('lock')}Provision & sign in</button>
+    </form>
+    <div class="auth-foot"><a href="#/">Back to public site</a></div>
+  </div></div></div>`;
+  bindMeter($('#suPass'),$('#suMeter'),$('#suMetert'));
+  $('#suForm').addEventListener('submit',async e=>{
+    e.preventDefault();clearErrs(e.target);
+    const pw=$('#suPass').value,pw2=$('#suPass2').value,nm=$('#suName').value.trim();
+    let bad=false;
+    if(pw.length<10||pwStrength(pw)<2){fieldErr($('#suPass'),'Minimum 10 characters with mixed case and a digit.');bad=true;}
+    if(pw!==pw2){fieldErr($('#suPass2'),'Passwords do not match.');bad=true;}
+    if(!nm){fieldErr($('#suName'),'Display name is required.');bad=true;}
+    if(bad)return;
+    const btn=$('#suBtn');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Hashing & provisioning\u2026';
+    const nu={id:uid('u'),username:OWNER_ID,displayName:nm||'Devanshu',passwordHash:await hashPassword(pw),role:'SUPER_ADMIN',status:'active',createdAt:now(),updatedAt:now(),lastLoginAt:null,mustChangePassword:false,isOwner:true};
+    db.users.push(nu);db.provisioned=true;
+    const s={token:randToken(),userId:nu.id,createdAt:now(),expiresAt:-1};
+    db.sessions.push(s);LS.set(SESSKEY,s.token);
+    nu.lastLoginAt=now();
+    audit(nu.id,OWNER_ID,'user.create','user',nu.id,'Owner (SUPER_ADMIN) provisioned during setup');
+    saveDB();S.user=nu;
+    toast('Administrator provisioned. Welcome to your headquarters.','success');
+    location.hash='#/dashboard';
+  });
+}
+function forcePasswordChange(){
+  const m=openModal({title:'Change your password',slim:true,static:true,body:`
+    <p style="color:var(--muted);font-size:13px;margin-bottom:18px">Your account was issued a temporary credential. Set a new password to continue.</p>
+    <div class="alert" id="cpAlert"></div>
+    <form id="cpForm" novalidate>
+      <div class="field"><label for="cpCur">Current password</label><input class="inp" id="cpCur" type="password" autofocus></div>
+      <div class="field"><label for="cpNew">New password</label><input class="inp" id="cpNew" type="password">${meterHTML('cpMeter')}</div>
+      <div class="field"><label for="cpNew2">Confirm new password</label><input class="inp" id="cpNew2" type="password"><div class="ferr"></div></div>
+      <button class="btn btn-block" id="cpBtn" type="submit">Update password${ic('check')}</button></form>`});
+  bindMeter(m.panel.querySelector('#cpNew'),m.panel.querySelector('#cpMeter'),m.panel.querySelector('#cpMetert'));
+  m.panel.querySelector('#cpForm').addEventListener('submit',async e=>{
+    e.preventDefault();
+    const cur=m.panel.querySelector('#cpCur').value,nw=m.panel.querySelector('#cpNew').value,nw2=m.panel.querySelector('#cpNew2').value;
+    if(nw!==nw2){fieldErr(m.panel.querySelector('#cpNew2'),'Passwords do not match.');return;}
+    try{m.panel.querySelector('#cpBtn').disabled=true;m.panel.querySelector('#cpBtn').innerHTML='<span class="spin"></span>Hashing\u2026';
+      await api.changePassword(S.user,cur,nw);
+      toast('Password updated.','success');m.close();refreshDash();
+    }catch(err){m.panel.querySelector('#cpAlert').textContent=err.message;m.panel.querySelector('#cpAlert').classList.add('show');m.panel.querySelector('#cpBtn').disabled=false;m.panel.querySelector('#cpBtn').innerHTML=`Update password${ic('check')}`;}
+  });
+}
 
+/* ================================================================
+   DASHBOARD
+   ================================================================ */
+const DASH_NAV=[
+  ['overview','Overview','grid',null],
+  ['websites','My Websites','globe',null],
+  ['projects','Projects','folder',null],
+  ['users','User Management','users','users_view'],
+  ['appearance','Appearance','palette','appearance'],
+  ['homepage','Homepage Editor','file','homepage_edit'],
+  ['media','Media Library','image','media_manage'],
+  ['logs','Activity Logs','list','logs_view'],
+  ['settings','Settings','sliders','settings']];
+function renderDashboard(route){
+  const sub=route.split('/')[1]||'overview';
+  const st=db.settings;
+  const logo=st.logoMediaId?`<img src="${mediaUrl(st.logoMediaId)}" style="width:30px;height:30px;border:1px solid var(--line);object-fit:cover" alt="">`:`<span class="mono">${esc(st.monogram)}</span>`;
+  const nav=DASH_NAV.filter(([,,_,cap])=>!cap||can(S.user,cap));
+  $('#chapters').innerHTML='';
+  $('#view').innerHTML=`<div class="dash ${LS.get('unfot_side')==='1'?'collapsed':''}" id="dash">
+    <aside class="dside" aria-label="Dashboard navigation">
+      <div class="ds-brand">${logo}<b>${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span> HQ</b></div>
+      <nav class="dnav">
+        <div class="grp">Content</div>
+        ${nav.slice(0,3).map(([k,l,i])=>dashLink(k,l,i)).join('')}
+        ${nav.length>3?`<div class="grp">Administration</div>${nav.slice(3).map(([k,l,i])=>dashLink(k,l,i)).join('')}`:''}
+      </nav>
+      <div class="dfoot">
+        <div class="duser"><span class="dava">${esc(S.user.displayName[0].toUpperCase())}</span><div><b>${esc(S.user.displayName)}</b><span>${esc(S.user.role)}${S.user.isOwner?' \u00B7 Owner':''}</span></div></div>
+        <button class="dlink" id="dLogout" style="width:100%">${ic('logout')}<span class="lbl">Logout</span></button>
+      </div></aside>
+    <div class="dmain">
+      <div class="dtop">
+        <button class="ibtn" id="dBurger" aria-label="Toggle sidebar" style="display:none">${ic('menu','sm')}</button>
+        <button class="ibtn" id="dCollapse" aria-label="Collapse sidebar">${ic('chevL','sm')}</button>
+        <span class="crumb">${esc(st.siteTitle)} / <b id="dCrumb">Overview</b></span><span class="sp"></span>
+        <a class="ibtn" href="${GH_URL}" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub repository">${ic('github','sm')}</a>
+        <a class="ibtn" href="#/" aria-label="View public site" title="View public site">${ic('globe','sm')}</a>
+      </div>
+      <div id="dashContent"></div>
+    </div></div>`;
+  $('#dCollapse').addEventListener('click',()=>{const c=$('#dash').classList.toggle('collapsed');LS.set('unfot_side',c?'1':'0');});
+  $('#dBurger').addEventListener('click',()=>$('#dash').classList.toggle('sopen'));
+  $('#dLogout').addEventListener('click',async()=>{apiLogout();renderNav();toast('Signed out. See you soon.','success');location.hash='#/';});
+  if(matchMedia('(max-width:880px)').matches){$('#dCollapse').style.display='none';$('#dBurger').style.display='grid';}
+  renderDashSub(sub);
+  if(S.user.mustChangePassword)forcePasswordChange();
+}
+function dashLink(k,l,i){return `<a href="#/dashboard/${k}" class="dlink ${S.sub===k?'on':''}" ${S.sub===k?'aria-current="page"':''}>${ic(i)}<span class="lbl">${esc(l)}</span></a>`;}
+function refreshDash(){renderDashSub(S.sub);}
+function renderDashSub(sub){
+  if(!S.user){location.hash='#/login';return;}
+  S.sub=DASH_NAV.some(n=>n[0]===sub)?sub:'overview';
+  const lockNav=[['users','users_view'],['appearance','appearance'],['homepage','homepage_edit'],['media','media_manage'],['logs','logs_view'],['settings','settings']];
+  for(const[k,cap]of lockNav)if(S.sub===k&&!can(S.user,cap)){toast('Your role does not include that area.','error');S.sub='overview';break;}
+  /* the Logout button has no href — guard against null before split */
+  $$('.dlink').forEach(a=>{const h=a.getAttribute('href');a.classList.toggle('on',!!h&&h.split('/')[2]===S.sub);});
+  $('#dCrumb').textContent=(DASH_NAV.find(n=>n[0]===S.sub)||['','Overview'])[1];
+  const c=$('#dashContent');
+  ({overview:dOverview,websites:dWebsites,projects:dProjects,users:dUsers,appearance:dAppearance,homepage:dHomepage,media:dMedia,logs:dLogs,settings:dSettings})[S.sub](c);
+}
+/* ---------- overview ---------- */
+function dOverview(el){
+  const user=S.user;
+  if(user.role==='USER'){
+    el.innerHTML=`<div class="dh"><div><h1>Welcome, ${esc(user.displayName)}</h1><p>Your read-only view of the headquarters.</p></div></div>
+      <div class="dcols"><div class="panel"><div class="panel-h"><h3>Your account</h3></div>
+        <div style="padding:8px 18px 16px">
+          <div class="kv"><span>User ID</span><b>${esc(user.username)}</b></div><div class="kv"><span>Role</span><b>${esc(user.role)}</b></div>
+          <div class="kv"><span>Status</span><b>${esc(user.status)}</b></div><div class="kv"><span>Registered</span><b>${fmtDate(user.createdAt)}</b></div>
+          <div class="kv"><span>Session</span><b>Until sign-out</b></div></div></div>
+      <div class="panel"><div class="panel-h"><h3>Directory at a glance</h3></div>
+        <div style="padding:8px 18px 16px">
+          <div class="kv"><span>Websites</span><b>${db.websites.filter(w=>w.isPublished).length} published</b></div>
+          <div class="kv"><span>Projects</span><b>${db.projects.filter(p=>p.status==='published').length} published</b></div></div>
+        <div style="padding:0 18px 18px"><a class="btn ghost sm" href="#/">${ic('globe')}Open public site</a></div></div></div>`;
+    return;
+  }
+  const week=now()-7*DAY;
+  const wNew=db.websites.filter(w=>w.createdAt>week).length;
+  const stats=[['Websites',db.websites.length,`${db.websites.filter(w=>w.isPublished).length} published${wNew?` \u00B7 +${wNew} this week`:''}`],
+    ['Projects',db.projects.length,`${db.projects.filter(p=>p.status==='published').length} published`],
+    ['People',db.users.length,`${db.users.filter(u=>u.status==='active').length} active accounts`],
+    ['Media',db.media.length,`${(db.media.reduce((s,m)=>s+m.size,0)/1024).toFixed(0)} KB used`]];
+  el.innerHTML=`<div class="dh"><div><h1>Overview</h1><p>${user.isOwner?'Owner access \u2014 every capability of the platform is unlocked for this account.':'The state of the whole platform, from real records.'}</p></div></div>
+    <div class="stat-strip">${stats.map(([l,n,s])=>`<div class="stat"><span>${l}</span><b>${n}</b><em>${esc(s)}</em></div>`).join('')}</div>
+    <div class="qa-row"><button class="btn sm" data-qa="w">${ic('plus')}Add website</button><button class="btn ghost sm" data-qa="p">${ic('plus')}New project</button>${can(user,'homepage_edit')?`<a class="btn ghost sm" href="#/dashboard/homepage">${ic('file')}Edit homepage</a>`:''}${can(user,'appearance')?`<a class="btn ghost sm" href="#/dashboard/appearance">${ic('palette')}Appearance</a>`:''}<a class="btn ghost sm" href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github')}GitHub repo</a></div>
+    <div class="dcols">
+      <div class="panel"><div class="panel-h"><h3>Recently added websites</h3><a href="#/dashboard/websites" style="font-size:11px;color:var(--accent);font-weight:800;letter-spacing:.1em">VIEW ALL</a></div>
+        ${[...db.websites].sort((a,b)=>b.createdAt-a.createdAt).slice(0,5).map(w=>`<div class="prow">${w.thumbnail?`<img src="${esc(w.thumbnail)}" alt="">`:'<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'}<b>${esc(w.title)}</b><span>${esc(catName(w.categoryId))}</span><span>${fmtDate(w.createdAt)}</span></div>`).join('')||'<div class="prow">Nothing yet</div>'}</div>
+      <div class="panel"><div class="panel-h"><h3>Recent activity</h3>${can(user,'logs_view')?`<a href="#/dashboard/logs" style="font-size:11px;color:var(--accent);font-weight:800;letter-spacing:.1em">FULL LOG</a>`:''}</div>
+        ${db.auditLogs.slice(0,5).map(l=>`<div class="prow">${ic('clock','sm')}<b>${esc(AUDIT_LABELS[l.action]||l.action)}</b><span>${esc(l.actorName)}</span><span>${ago(l.createdAt)}</span></div>`).join('')}</div></div>`;
+  el.querySelectorAll('[data-qa]').forEach(b=>b.addEventListener('click',()=>b.dataset.qa==='w'?openWebsiteEditor():openProjectEditor()));
+}
+/* ---------- websites manager ---------- */
+function dWebsites(el){
+  const st=S.dash.websites=S.dash.websites||{q:'',cat:'all',status:'all',page:1};
+  const per=db.settings.itemsPerPage||8;
+  const draw=()=>{
+    let items=[...db.websites];
+    if(st.cat!=='all')items=items.filter(w=>w.categoryId===st.cat);
+    if(st.status!=='all')items=items.filter(w=>w.status===st.status);
+    const q=st.q.toLowerCase();if(q)items=items.filter(w=>(w.title+w.url+w.tags.join(' ')).toLowerCase().includes(q));
+    items.sort((a,b)=>b.createdAt-a.createdAt);
+    const pages=Math.max(1,Math.ceil(items.length/per));st.page=Math.min(st.page,pages);
+    const view=items.slice((st.page-1)*per,st.page*per);
+    el.innerHTML=`<div class="dh"><div><h1>My Websites</h1><p>${db.websites.length} entries in the directory.</p></div>
+      <button class="btn" id="wAdd">${ic('plus')}Add website</button></div>
+    <div class="toolbar"><label class="search">${ic('search')}<input id="wq" placeholder="Search title, URL, tags\u2026" value="${esc(st.q)}"></label>
+      <select class="sortsel" id="wcat"><option value="all">All categories</option>${db.categories.map(c=>`<option value="${c.id}" ${st.cat===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
+      <select class="sortsel" id="wst">${[['all','All statuses'],['active','Active'],['development','Development'],['archived','Archived']].map(([v,l])=>`<option value="${v}" ${st.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
+    <div class="dtable-wrap"><table class="dt"><thead><tr><th>Website</th><th>Category</th><th>Status</th><th>Visibility</th><th>Added</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+      ${view.map(w=>`<tr>
+        <td><div class="cell-main">${w.thumbnail?`<img src="${esc(w.thumbnail)}" alt="">`:'<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'}<div><b>${esc(w.title)}${w.isFavorite?' <span style="color:var(--accent)">\u2605</span>':''}</b><span>${esc(w.url.replace(/^https?:\/\//,''))}</span></div></div></td>
+        <td><span class="sub">${esc(catName(w.categoryId))}</span></td>
+        <td><span class="pill st-${w.status==='active'?'ok':w.status==='development'?'warn':'mut'}">${w.status}</span></td>
+        <td><button class="ibtn ${w.isPublished?'on':''}" data-wpub="${w.id}" aria-label="Toggle visibility" title="${w.isPublished?'Published on public site':'Hidden from public site'}">${ic('eye','sm')}</button></td>
+        <td><span class="sub">${fmtDate(w.createdAt)}</span></td>
+        <td><div style="display:flex;gap:6px;justify-content:flex-end">
+          <button class="ibtn ${w.isFavorite?'on':''}" data-wfav="${w.id}" aria-label="Toggle favorite">${ic('star','sm')}</button>
+          <button class="ibtn" data-wedit="${w.id}" aria-label="Edit">${ic('pencil','sm')}</button>
+          <button class="ibtn dng" data-wdel="${w.id}" aria-label="Delete">${ic('trash','sm')}</button></div></td></tr>`).join('')||`<tr><td colspan="6" style="text-align:center;color:var(--faint);padding:40px">No websites match. ${db.websites.length?'Adjust the filters.':'Add your first entry.'}</td></tr>`}
+    </tbody></table></div>
+    <div class="pager" id="wpager"></div>`;
+    $('#wAdd').addEventListener('click',()=>openWebsiteEditor());
+    $('#wq').addEventListener('input',debounce(e=>{st.q=e.target.value;st.page=1;draw();},200));
+    $('#wcat').addEventListener('change',e=>{st.cat=e.target.value;st.page=1;draw();});
+    $('#wst').addEventListener('change',e=>{st.status=e.target.value;st.page=1;draw();});
+    const pg=$('#wpager');
+    if(pages>1){pg.innerHTML=`<button ${st.page<=1?'disabled':''} data-pg="${st.page-1}">${ic('chevL','sm')}</button>`+
+      Array.from({length:pages},(_,i)=>`<button class="${st.page===i+1?'on':''}" data-pg="${i+1}">${i+1}</button>`).join('')+
+      `<button ${st.page>=pages?'disabled':''} data-pg="${st.page+1}">${ic('chevR','sm')}</button>`;
+      pg.querySelectorAll('[data-pg]').forEach(b=>b.addEventListener('click',()=>{st.page=+b.dataset.pg;draw();}));}
+    el.querySelectorAll('[data-wedit]').forEach(b=>b.addEventListener('click',()=>openWebsiteEditor(b.dataset.wedit)));
+    el.querySelectorAll('[data-wfav]').forEach(b=>b.addEventListener('click',()=>{api.toggleFav(S.user,b.dataset.wfav);draw();}));
+    el.querySelectorAll('[data-wpub]').forEach(b=>b.addEventListener('click',()=>{api.toggleWPublish(S.user,b.dataset.wpub);draw();}));
+    el.querySelectorAll('[data-wdel]').forEach(b=>b.addEventListener('click',()=>{
+      const w=db.websites.find(x=>x.id===b.dataset.wdel);
+      confirmDialog({title:'Delete website',message:`Remove <b>${esc(w.title)}</b> permanently?`,confirmLabel:'Delete',danger:true})
+        .then(y=>{if(y){api.deleteWebsite(S.user,b.dataset.wdel);toast('Website deleted.','success');draw();}});}));
+  };
+  draw();
+}
+function mediaPicker(cb,current){
+  const m=openModal({title:'Media library',slim:true,body:db.media.length?`<div class="mgrid">${db.media.map(x=>`<div class="mitem"><div class="mm"><img src="${x.dataUrl}" data-pick="${x.id}" style="cursor:pointer;${current===x.id?'outline:2px solid var(--accent);outline-offset:-2px':''}" alt="${esc(x.name)}"></div></div>`).join('')}</div>`:'<p style="color:var(--muted);text-align:center;padding:20px 0">The library is empty. Upload images in Media Library first.</p>'});
+  m.panel.querySelectorAll('[data-pick]').forEach(im=>im.addEventListener('click',()=>{cb(im.dataset.pick,im.src);m.close();}));
+}
+function openWebsiteEditor(id){
+  const w=id?db.websites.find(x=>x.id===id):null;
+  let thumb=w?w.thumbnail:'';
+  const m=openModal({title:w?'Edit website':'Add website',wide:true,body:`
+    <div class="fgrid">
+      <div class="field full"><label>Title *</label><input class="inp" id="wfTitle" value="${esc(w?.title||'')}" maxlength="80" autofocus></div>
+      <div class="field full"><label>URL *</label><input class="inp" id="wfUrl" value="${esc(w?.url||'https://')}" placeholder="https://\u2026"><div class="ferr"></div></div>
+      <div class="field full"><label>Description</label><textarea class="inp" id="wfDesc" rows="3" maxlength="240">${esc(w?.description||'')}</textarea></div>
+      <div class="field"><label>Category</label><select class="inp" id="wfCat">${db.categories.map(c=>`<option value="${c.id}" ${w?.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Status</label><select class="inp" id="wfStatus">${[['active','Active'],['development','Development'],['archived','Archived']].map(([v,l])=>`<option value="${v}" ${w?.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="field full"><label>Tags <span style="text-transform:none;color:var(--faint)">(comma separated, max 6)</span></label><input class="inp" id="wfTags" value="${esc(w?.tags.join(', ')||'')}"></div>
+      <div class="field full"><label>Thumbnail</label>
+        <img class="thumb-prev" id="wfPrev" src="${thumb||'data:image/gif;base64,R0lGODlhAQABAAAAACw='}" alt="" style="${thumb?'':'display:none'}">
+        <div style="display:flex;gap:8px"><input class="inp" id="wfThumb" placeholder="Image URL, or pick from library" value="${esc(thumb)}" style="flex:1">
+        <button class="btn ghost sm" id="wfPick" type="button">${ic('image')}Library</button></div></div>
+      <div class="field"><label>Options</label>
+        <label class="cb" style="margin-bottom:10px"><input type="checkbox" id="wfFav" ${w?.isFavorite?'checked':''}><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Mark as favorite</label>
+        <label class="cb"><input type="checkbox" id="wfPub" ${!w||w.isPublished?'checked':''}><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Visible on public site</label></div>
+    </div>`,
+    foot:`<button class="btn ghost sm" data-mclose-x>Cancel</button><button class="btn sm" id="wfSave">${w?'Save changes':'Add to directory'}${ic('check')}</button>`});
+  m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
+  /* manual URL input always overrides a library pick */
+  m.panel.querySelector('#wfThumb').addEventListener('input',e=>{delete e.target.dataset.lib;thumb=e.target.value.trim();m.panel.querySelector('#wfPrev').src=thumb||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#wfPrev').style.display=thumb?'block':'none';});
+  m.panel.querySelector('#wfPick').addEventListener('click',()=>mediaPicker((mid,src)=>{thumb=src;m.panel.querySelector('#wfThumb').value='(from library)';m.panel.querySelector('#wfPrev').src=src;m.panel.querySelector('#wfPrev').style.display='block';m.panel.querySelector('#wfThumb').dataset.lib=mid;},null));
+  m.panel.querySelector('#wfSave').addEventListener('click',()=>{
+    const thumbInp=m.panel.querySelector('#wfThumb');
+    const data={title:m.panel.querySelector('#wfTitle').value,url:m.panel.querySelector('#wfUrl').value.trim(),description:m.panel.querySelector('#wfDesc').value,categoryId:m.panel.querySelector('#wfCat').value,
+      tags:m.panel.querySelector('#wfTags').value,status:m.panel.querySelector('#wfStatus').value,isFavorite:m.panel.querySelector('#wfFav').checked,isPublished:m.panel.querySelector('#wfPub').checked,
+      thumbnail:thumbInp.dataset.lib?mediaUrl(thumbInp.dataset.lib):thumb};
+    try{
+      if(w)api.updateWebsite(S.user,w.id,data);else api.createWebsite(S.user,data);
+      closeModal();toast(w?'Website updated.':'Website added to the directory.','success');
+      if(S.sub==='websites')refreshDash();
+    }catch(err){const f=m.panel.querySelector('#wfUrl').closest('.field');f.querySelector('.ferr').textContent=err.message;f.querySelector('.ferr').classList.add('show');m.panel.querySelector('#wfUrl').classList.add('err');}
+  });
+}
+/* ---------- projects manager ---------- */
+function dProjects(el){
+  const st=S.dash.projects=S.dash.projects||{q:'',status:'all',page:1};
+  const per=db.settings.itemsPerPage||8;
+  const draw=()=>{
+    let items=[...db.projects];
+    if(st.status!=='all')items=items.filter(p=>p.status===st.status);
+    const q=st.q.toLowerCase();if(q)items=items.filter(p=>(p.title+p.technologies.join(' ')).toLowerCase().includes(q));
+    items.sort((a,b)=>b.createdAt-a.createdAt);
+    const pages=Math.max(1,Math.ceil(items.length/per));st.page=Math.min(st.page,pages);
+    const view=items.slice((st.page-1)*per,st.page*per);
+    const pill={published:['ok','Published'],draft:['warn','Draft'],archived:['mut','Archived']};
+    el.innerHTML=`<div class="dh"><div><h1>Projects</h1><p>${db.projects.length} builds tracked.</p></div>
+      <button class="btn" id="pAdd">${ic('plus')}New project</button></div>
+    <div class="toolbar"><label class="search">${ic('search')}<input id="pq" placeholder="Search projects\u2026" value="${esc(st.q)}"></label>
+      <select class="sortsel" id="pst">${[['all','All statuses'],['draft','Draft'],['published','Published'],['archived','Archived']].map(([v,l])=>`<option value="${v}" ${st.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
+    <div class="dtable-wrap"><table class="dt"><thead><tr><th>Project</th><th>Stack</th><th>Status</th><th>Created</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+      ${view.map(p=>`<tr>
+        <td><div class="cell-main">${p.coverImage?`<img src="${esc(p.coverImage)}" alt="">`:'<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'}<div><b>${esc(p.title)}</b><span>${p.demoUrl?'Demo live':'No demo'}</span></div></div></td>
+        <td><span class="sub">${esc(p.technologies.slice(0,3).join(' \u00B7 '))||'\u2014'}</span></td>
+        <td><span class="pill ${pill[p.status][0]}">${pill[p.status][1]}</span></td>
+        <td><span class="sub">${fmtDate(p.createdAt)}</span></td>
+        <td><div style="display:flex;gap:6px;justify-content:flex-end">
+          <button class="btn ghost sm" style="padding:6px 12px" data-ppub="${p.id}">${p.status==='published'?'Unpublish':'Publish'}</button>
+          <button class="ibtn" data-pedit="${p.id}" aria-label="Edit">${ic('pencil','sm')}</button>
+          <button class="ibtn dng" data-pdel="${p.id}" aria-label="Delete">${ic('trash','sm')}</button></div></td></tr>`).join('')||`<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:40px">No projects found.</td></tr>`}
+    </tbody></table></div><div class="pager" id="ppager"></div>`;
+    $('#pAdd').addEventListener('click',()=>openProjectEditor());
+    $('#pq').addEventListener('input',debounce(e=>{st.q=e.target.value;st.page=1;draw();},200));
+    $('#pst').addEventListener('change',e=>{st.status=e.target.value;st.page=1;draw();});
+    if(pages>1){const pg=$('#ppager');pg.innerHTML=`<button ${st.page<=1?'disabled':''} data-pg="${st.page-1}">${ic('chevL','sm')}</button>`+Array.from({length:pages},(_,i)=>`<button class="${st.page===i+1?'on':''}" data-pg="${i+1}">${i+1}</button>`).join('')+`<button ${st.page>=pages?'disabled':''} data-pg="${st.page+1}">${ic('chevR','sm')}</button>`;
+      pg.querySelectorAll('[data-pg]').forEach(b=>b.addEventListener('click',()=>{st.page=+b.dataset.pg;draw();}));}
+    el.querySelectorAll('[data-ppub]').forEach(b=>b.addEventListener('click',()=>{const id=b.dataset.ppub;api.setProjectStatus(S.user,id,db.projects.find(p=>p.id===id).status==='published'?'draft':'published');toast('Project status updated.','success');draw();}));
+    el.querySelectorAll('[data-pedit]').forEach(b=>b.addEventListener('click',()=>openProjectEditor(b.dataset.pedit)));
+    el.querySelectorAll('[data-pdel]').forEach(b=>b.addEventListener('click',()=>{const p=db.projects.find(x=>x.id===b.dataset.pdel);
+      confirmDialog({title:'Delete project',message:`Delete <b>${esc(p.title)}</b> permanently?`,confirmLabel:'Delete',danger:true}).then(y=>{if(y){api.deleteProject(S.user,b.dataset.pdel);toast('Project deleted.','success');draw();}});}));
+  };
+  draw();
+}
+function openProjectEditor(id){
+  const p=id?db.projects.find(x=>x.id===id):null;
+  let cover=p?p.coverImage:'';
+  const m=openModal({title:p?'Edit project':'New project',wide:true,body:`
+    <div class="fgrid">
+      <div class="field full"><label>Title *</label><input class="inp" id="pfTitle" value="${esc(p?.title||'')}" maxlength="90" autofocus></div>
+      <div class="field full"><label>Description</label><textarea class="inp" id="pfDesc" rows="3" maxlength="400">${esc(p?.description||'')}</textarea></div>
+      <div class="field full"><label>Cover image</label>
+        <img class="thumb-prev" id="pfPrev" src="${cover||'data:image/gif;base64,R0lGODlhAQABAAAAACw='}" alt="" style="${cover?'':'display:none'}">
+        <div style="display:flex;gap:8px"><input class="inp" id="pfCover" placeholder="Image URL, or pick from library" value="${esc(cover)}" style="flex:1"><button class="btn ghost sm" id="pfPick" type="button">${ic('image')}Library</button></div></div>
+      <div class="field"><label>Technologies <span style="text-transform:none;color:var(--faint)">(comma separated)</span></label><input class="inp" id="pfTech" value="${esc(p?.technologies.join(', ')||'')}"></div>
+      <div class="field"><label>Status</label><select class="inp" id="pfStatus">${[['draft','Draft'],['published','Published'],['archived','Archived']].map(([v,l])=>`<option value="${v}" ${p?.status===v?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Live demo URL</label><input class="inp" id="pfDemo" value="${esc(p?.demoUrl||'')}" placeholder="https://\u2026"><div class="ferr"></div></div>
+      <div class="field"><label>Source code URL</label><input class="inp" id="pfSrc" value="${esc(p?.sourceUrl||'')}" placeholder="https://\u2026"><div class="ferr"></div></div>
+    </div>`,
+    foot:`<button class="btn ghost sm" data-mclose-x>Cancel</button><button class="btn sm" id="pfSave">${p?'Save changes':'Create project'}${ic('check')}</button>`});
+  m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
+  m.panel.querySelector('#pfCover').addEventListener('input',e=>{delete e.target.dataset.lib;cover=e.target.value.trim();m.panel.querySelector('#pfPrev').src=cover||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#pfPrev').style.display=cover?'block':'none';});
+  m.panel.querySelector('#pfPick').addEventListener('click',()=>mediaPicker((mid,src)=>{cover=src;m.panel.querySelector('#pfCover').value='(from library)';m.panel.querySelector('#pfPrev').src=src;m.panel.querySelector('#pfPrev').style.display='block';m.panel.querySelector('#pfCover').dataset.lib=mid;},null));
+  m.panel.querySelector('#pfSave').addEventListener('click',()=>{
+    const coverInp=m.panel.querySelector('#pfCover');
+    const data={title:m.panel.querySelector('#pfTitle').value,description:m.panel.querySelector('#pfDesc').value,coverImage:coverInp.dataset.lib?mediaUrl(coverInp.dataset.lib):cover,
+      technologies:m.panel.querySelector('#pfTech').value,demoUrl:m.panel.querySelector('#pfDemo').value.trim(),sourceUrl:m.panel.querySelector('#pfSrc').value.trim(),status:m.panel.querySelector('#pfStatus').value};
+    try{
+      if(p){delete data.status;api.updateProject(S.user,p.id,data);api.setProjectStatus(S.user,p.id,m.panel.querySelector('#pfStatus').value);}
+      else api.createProject(S.user,data);
+      closeModal();toast(p?'Project updated.':'Project created.','success');
+      if(S.sub==='projects')refreshDash();
+    }catch(err){const f=m.panel.querySelector('#pfDemo').closest('.field');const fe=f.querySelector('.ferr');fe.textContent=err.message;fe.classList.add('show');}
+  });
+}
+/* ---------- user management ---------- */
+function dUsers(el){
+  const users=[...db.users].sort((a,b)=>a.createdAt-b.createdAt);
+  const me=S.user;
+  const canManage=can(me,'users_manage'); /* SUPER_ADMIN only — matches what the API enforces */
+  const rowFor=u=>{
+    const self=u.id===me.id;
+    return `<tr>
+      <td><div class="cell-main"><span class="dava" style="background:${self||u.isOwner?'var(--accent)':'var(--bg3)'};color:${self||u.isOwner?'var(--accent-ink)':'var(--ink)'};border:1px solid var(--line)">${esc(u.displayName[0].toUpperCase())}</span>
+        <div><b>${esc(u.displayName)}</b><span>@${esc(u.username)}${self?' \u00B7 you':''}</span></div></div></td>
+      <td>${u.isOwner?`<span class="pill acc" title="Owner \u2014 permanent SUPER_ADMIN, protected from all changes">Owner \u00B7 ${esc(u.role)}</span>`
+        :me.role==='SUPER_ADMIN'&&!self?`<select class="role-sel" data-urole="${u.id}" aria-label="Role of ${esc(u.username)}">${['SUPER_ADMIN','ADMIN','EDITOR','USER'].map(r=>`<option ${u.role===r?'selected':''}>${r}</option>`).join('')}</select>`
+        :`<span class="pill acc">${esc(u.role)}</span>`}</td>
+      <td><span class="pill ${u.status==='active'?'ok':'dng'}">${u.status}</span></td>
+      <td><span class="sub">${fmtDate(u.createdAt)}</span></td>
+      <td><span class="sub">${u.lastLoginAt?ago(u.lastLoginAt):'never'}</span></td>
+      <td><div style="display:flex;gap:6px;justify-content:flex-end">
+        ${u.isOwner?'<span class="hint" style="margin:0">Protected</span>':self?'<span class="hint" style="margin:0">\u2014</span>':canManage?`<button class="ibtn" data-ureset="${u.id}" title="Reset password (temp credential)">${ic('key','sm')}</button>
+        <button class="ibtn" data-usess="${u.id}" title="Revoke sessions">${ic('logout','sm')}</button>
+        <button class="ibtn ${u.status==='active'?'dng':''}" data-ustat="${u.id}" title="${u.status==='active'?'Disable account':'Reactivate account'}">${ic(u.status==='active'?'lock':'check','sm')}</button>
+        <button class="ibtn dng" data-udel="${u.id}" title="Delete account (ends sessions, frees the ID)">${ic('trash','sm')}</button>`:''}
+      </div></td></tr>`;
+  };
+  el.innerHTML=`<div class="dh"><div><h1>User Management</h1><p>${users.length} registered account${users.length===1?'':'s'} \u00B7 credentials are one-way hashed (PBKDF2).</p></div>
+    <button class="btn" id="uAdd">${ic('plus')}Create user</button></div>
+  <div class="dtable-wrap"><table class="dt" style="min-width:820px"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Registered</th><th>Last sign-in</th><th style="text-align:right">Actions</th></tr></thead>
+  <tbody>${users.map(rowFor).join('')}</tbody></table></div>
+  <p class="hint" style="margin-top:14px">Passwords can never be viewed or retrieved \u2014 only reset to a one-time temporary credential. Sessions persist until sign-out, disabling, or <b>deletion of the account</b>. The owner (<b>@${OWNER_ID}</b>) holds permanent SUPER_ADMIN control and cannot be demoted, disabled, or deleted \u2014 even by another administrator.</p>`;
+  $('#uAdd').addEventListener('click',openUserCreator);
+  el.querySelectorAll('[data-urole]').forEach(s=>s.addEventListener('change',async()=>{
+    const id=s.dataset.urole,u=db.users.find(x=>x.id===id);
+    if(await confirmDialog({title:'Change role',message:`Set <b>${esc(u.username)}</b>\u2019s role to <b>${esc(s.value)}</b>?`,confirmLabel:'Change role'})){
+      try{api.setRole(S.user,id,s.value);toast('Role updated.','success');refreshDash();}
+      catch(e){toast(e.message,'error');refreshDash();}
+    }else refreshDash();
+  }));
+  el.querySelectorAll('[data-ureset]').forEach(b=>b.addEventListener('click',async()=>{
+    const u=db.users.find(x=>x.id===b.dataset.ureset);
+    if(!await confirmDialog({title:'Reset password',message:`Issue a one-time temporary password for <b>${esc(u.username)}</b>? All their sessions will be revoked.`,confirmLabel:'Reset password'}))return;
+    const tmp=await api.resetPassword(S.user,u.id);
+    const mm=openModal({title:'Temporary password \u2014 shown once',slim:true,body:`
+      <p style="color:var(--muted);font-size:13px">Give this to <b>${esc(u.displayName)}</b> now. It is hashed in storage and will <b>not</b> be shown again, and it is never written to the audit log.</p>
+      <div class="pw-reveal">${esc(tmp)}</div><p class="hint">The user must change it at next sign-in.</p>`,
+      foot:`<button class="btn sm" data-copypw="${esc(tmp)}">${ic('copy')}Copy</button>`});
+    mm.panel.querySelector('[data-copypw]').addEventListener('click',ev=>{navigator.clipboard?.writeText(ev.currentTarget.dataset.copypw).then(()=>toast('Copied to clipboard.','success')).catch(()=>toast('Copy failed — select it manually.','error'));});
+  }));
+  el.querySelectorAll('[data-usess]').forEach(b=>b.addEventListener('click',async()=>{
+    const u=db.users.find(x=>x.id===b.dataset.usess);
+    if(await confirmDialog({title:'Revoke sessions',message:`Sign <b>${esc(u.username)}</b> out of all devices?`,confirmLabel:'Revoke'})){const n=api.revokeSessions(S.user,u.id);toast(`${n} session(s) revoked.`,'success');refreshDash();}
+  }));
+  el.querySelectorAll('[data-ustat]').forEach(b=>b.addEventListener('click',async()=>{
+    const u=db.users.find(x=>x.id===b.dataset.ustat);
+    const to=u.status==='active'?'disabled':'active';
+    if(await confirmDialog({title:to==='disabled'?'Disable account':'Reactivate account',message:`${to==='disabled'?`<b>${esc(u.username)}</b> will be signed out everywhere and blocked from signing in.`:`<b>${esc(u.username)}</b> will be able to sign in again.`}`,confirmLabel:to==='disabled'?'Disable':'Reactivate',danger:to==='disabled'})){
+      try{api.setStatus(S.user,u.id,to);toast(`Account ${to}.`,'success');refreshDash();}catch(e){toast(e.message,'error');}
+    }
+  }));
+  el.querySelectorAll('[data-udel]').forEach(b=>b.addEventListener('click',async()=>{
+    const u=db.users.find(x=>x.id===b.dataset.udel);
+    if(await confirmDialog({title:'Delete account',message:`Permanently delete <b>${esc(u.username)}</b>? Their sessions end immediately and the user ID is freed. This cannot be undone.`,confirmLabel:'Delete forever',danger:true})){
+      try{api.deleteUser(S.user,u.id);toast('Account deleted.','success');refreshDash();}catch(e){toast(e.message,'error');}
+    }
+  }));
+}
+function openUserCreator(){
+  let tempPw=genTempPw();
+  const m=openModal({title:'Create user',body:`
+    <div class="fgrid">
+      <div class="field"><label>User ID *</label><input class="inp" id="ufUser" placeholder="e.g. maya.k" autofocus><div class="ferr"></div></div>
+      <div class="field"><label>Display name *</label><input class="inp" id="ufName"><div class="ferr"></div></div>
+      <div class="field"><label>Role</label><select class="inp" id="ufRole">${(S.user.role==='SUPER_ADMIN'?['ADMIN','EDITOR','USER']:['EDITOR','USER']).map(r=>`<option>${r}</option>`).join('')}</select></div>
+      <div class="field"><label>Initial password *</label>
+        <div class="pw-wrap"><input class="inp" id="ufPass" value="${esc(tempPw)}"><button type="button" class="pw-eye" id="ufGen" title="Regenerate" aria-label="Regenerate password">${ic('refresh','sm')}</button></div>
+        <div class="hint">The user must change this at first sign-in.</div></div>
+    </div>`,
+    foot:`<button class="btn ghost sm" data-mclose-x>Cancel</button><button class="btn sm" id="ufSave">${ic('plus')}Create account</button>`});
+  m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
+  m.panel.querySelector('#ufGen').addEventListener('click',()=>{tempPw=genTempPw();m.panel.querySelector('#ufPass').value=tempPw;});
+  m.panel.querySelector('#ufSave').addEventListener('click',async()=>{
+    const btn=m.panel.querySelector('#ufSave');
+    btn.disabled=true;btn.innerHTML='<span class="spin"></span>Hashing\u2026';
+    try{
+      const u=await api.createUser(S.user,{username:m.panel.querySelector('#ufUser').value,displayName:m.panel.querySelector('#ufName').value,role:m.panel.querySelector('#ufRole').value,password:m.panel.querySelector('#ufPass').value});
+      closeModal();
+      const mm=openModal({title:'Account created',slim:true,body:`
+        <div class="kv"><span>User ID</span><b>${esc(u.user.username)}</b></div>
+        <div class="kv"><span>Role</span><b>${esc(u.user.role)}</b></div>
+        <div class="kv"><span>Temp password</span><b style="font-family:ui-monospace,monospace">${esc(u.tempPassword)}</b></div>
+        <p class="hint" style="margin-top:12px">Share the password now \u2014 it is stored only as a hash and shown once.</p>`,
+        foot:`<button class="btn sm" data-mclose-x>Done</button>`});
+      mm.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
+      refreshDash();
+    }catch(err){const f=m.panel.querySelector('#ufUser').closest('.field');f.querySelector('.ferr').textContent=err.message;f.querySelector('.ferr').classList.add('show');
+      btn.disabled=false;btn.innerHTML=`${ic('plus')}Create account`;}
+  });
+}
+/* ---------- appearance ---------- */
+function dAppearance(el){
+  const st=db.settings;
+  el.innerHTML=`<div class="dh"><div><h1>Appearance</h1><p>Identity, color and navigation \u2014 applied to the public site on save.</p></div></div>
+  <div class="ap-grid"><div>
+    <div class="form-sec"><h3>Identity</h3>
+      <div class="fgrid">
+        <div class="field"><label>Site title</label><input class="inp" id="apTitle" value="${esc(st.siteTitle)}" maxlength="30"></div>
+        <div class="field"><label>Monogram</label><input class="inp" id="apMono" value="${esc(st.monogram)}" maxlength="3"></div>
+        <div class="field full"><label>Logo image (optional)</label>
+          <div style="display:flex;gap:10px;align-items:center">${st.logoMediaId?`<img src="${mediaUrl(st.logoMediaId)}" style="width:34px;height:34px;border:1px solid var(--line);object-fit:cover" id="apLogoPrev" alt="Logo">`:`<span style="width:34px;height:34px;border:1px solid var(--line);display:grid;place-items:center" id="apLogoPrev">${esc(st.monogram)}</span>`}
+          <button class="btn ghost sm" id="apLogoPick" type="button">${ic('image')}Choose from library</button><button class="btn ghost sm" id="apLogoClear" type="button">None</button></div></div>
+      </div></div>
+    <div class="form-sec"><h3>Accent color</h3><div class="swatches" id="apSwatches">${ACCENTS.map(a=>`<button class="sw ${st.accent===a.v?'on':''}" data-v="${a.v}" style="background:${a.v}" title="${a.n}" aria-label="Accent ${a.n}"></button>`).join('')}</div>
+      <p class="hint">The green full-stop device always uses the current accent. Each option is tuned separately for dark and light themes.</p></div>
+    <div class="form-sec"><h3>Default theme</h3><div class="seg" id="apTheme"><button data-t="dark" class="${st.defaultTheme==='dark'?'on':''}">Dark</button><button data-t="light" class="${st.defaultTheme==='light'?'on':''}">Light</button></div></div>
+    <div class="form-sec"><h3>Navigation labels</h3><div class="fgrid">
+      ${[['home','Home'],['websites','My Websites'],['projects','Projects'],['about','About']].map(([k,l])=>`<div class="field"><label>${l}</label><input class="inp" id="ap-${k}" value="${esc(st.nav[k]||'')}"></div>`).join('')}
+    </div></div>
+    <div class="form-sec"><h3>Footer</h3>
+      <div class="field"><label>Footer tagline</label><input class="inp" id="apFNote" value="${esc(st.footer.note)}" maxlength="80"></div>
+      <div class="fgrid">${st.footer.socials.map((s,i)=>`<div class="field"><label>${esc(s.label)} URL</label><input class="inp" data-soc="${i}" value="${esc(s.url)}"></div>`).join('')}</div></div>
+    <div style="display:flex;gap:12px"><button class="btn" id="apSave">${ic('check')}Save appearance</button><button class="btn ghost" id="apReset">Reset</button></div>
+  </div>
+  <div class="ap-prev"><div class="bar">Live preview</div>
+    <div class="pv-nav">${esc(st.nav.home)} \u00B7 ${esc(st.nav.websites)} \u00B7 ${esc(st.nav.projects)} \u00B7 ${esc(st.nav.about)}</div>
+    <div class="pv-hero"><h2 id="apPvTitle">${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></h2><div class="b" id="apPvBtn">${esc(st.nav.home)}</div></div>
+    <div class="pv-foot" id="apPvFoot">\u2022 ${esc(st.footer.note)}</div></div></div>`;
+  let logoId=st.logoMediaId,accent=st.accent,theme=st.defaultTheme;
+  el.querySelectorAll('#apSwatches .sw').forEach(b=>b.addEventListener('click',()=>{accent=b.dataset.v;$$('#apSwatches .sw').forEach(x=>x.classList.toggle('on',x===b));db.settings.accent=accent;applyIdentity();}));
+  el.querySelectorAll('#apTheme button').forEach(b=>b.addEventListener('click',()=>{theme=b.dataset.t;$$('#apTheme button').forEach(x=>x.classList.toggle('on',x===b));}));
+  $('#apTitle').addEventListener('input',e=>{$('#apPvTitle').innerHTML=esc(e.target.value)+'<span class="dot" aria-hidden="true"></span>';});
+  $('#apFNote').addEventListener('input',e=>{$('#apPvFoot').textContent='\u2022 '+e.target.value;});
+  $('#apLogoPick').addEventListener('click',()=>mediaPicker((mid,src)=>{logoId=mid;const p=$('#apLogoPrev');const im=document.createElement('img');im.id='apLogoPrev';im.src=src;im.alt='Logo';im.style.cssText='width:34px;height:34px;border:1px solid var(--line);object-fit:cover';p.replaceWith(im);},logoId));
+  $('#apLogoClear').addEventListener('click',()=>{logoId=null;const p=$('#apLogoPrev');const sp=document.createElement('span');sp.id='apLogoPrev';sp.style.cssText='width:34px;height:34px;border:1px solid var(--line);display:grid;place-items:center';sp.textContent=$('#apMono').value;p.replaceWith(sp);});
+  $('#apReset').addEventListener('click',()=>{renderDashSub('appearance');applyIdentity();});
+  $('#apSave').addEventListener('click',()=>{
+    try{
+      api.updateAppearance(S.user,{siteTitle:$('#apTitle').value,monogram:$('#apMono').value,logoMediaId:logoId,accent,defaultTheme:theme,
+        navHome:$('#ap-home').value,navWebsites:$('#ap-websites').value,navProjects:$('#ap-projects').value,navAbout:$('#ap-about').value,
+        footerNote:$('#apFNote').value,socials:st.footer.socials.map((s,i)=>({...s,url:el.querySelector(`[data-soc="${i}"]`).value.trim()}))});
+      renderNav();toast('Appearance saved \u2014 live on the public site.','success');
+    }catch(e){toast(e.message,'error');}
+  });
+}
+/* ---------- homepage editor ---------- */
+function dHomepage(el){
+  const st=db.settings;
+  el.innerHTML=`<div class="dh"><div><h1>Homepage Editor</h1><p>Every word below renders on the public site \u2014 no code, no redeploy.</p></div></div>
+  <div class="form-sec"><h3>Hero</h3><div class="fgrid">
+    <div class="field"><label>Headline \u00B7 line 1</label><input class="inp" id="heL1" value="${esc(st.hero.l1)}" maxlength="40"></div>
+    <div class="field"><label>Headline \u00B7 line 2 (italic)</label><input class="inp" id="heL2" value="${esc(st.hero.l2)}" maxlength="40"></div>
+    <div class="field"><label>Sub-line</label><input class="inp" id="heSub" value="${esc(st.hero.sub)}" maxlength="120"></div>
+    <div class="field"><label>Supporting sentence</label><input class="inp" id="heBody" value="${esc(st.hero.body)}" maxlength="300"></div>
+    <div class="field"><label>Primary CTA</label><input class="inp" id="heC1" value="${esc(st.hero.cta1)}" maxlength="30"></div>
+    <div class="field"><label>Secondary CTA</label><input class="inp" id="heC2" value="${esc(st.hero.cta2)}" maxlength="30"></div>
+    <div class="field full"><label>Ticker words <span style="text-transform:none;color:var(--faint)">(separate with | )</span></label><input class="inp" id="heTicker" value="${esc(st.ticker)}"></div>
+  </div></div>
+  <div class="form-sec"><h3>Introduction</h3>
+    <div class="field"><label>Statement</label><input class="inp" id="heIntro" value="${esc(st.intro.statement)}" maxlength="140"></div>
+    <div class="field"><label>Body</label><textarea class="inp" id="heIntroB" rows="2" maxlength="400">${esc(st.intro.body)}</textarea></div></div>
+  <div class="form-sec"><h3>About</h3>
+    <div class="field"><label>Heading</label><input class="inp" id="heAboutT" value="${esc(st.about.title)}" maxlength="140"></div>
+    <div class="field"><label>Body</label><textarea class="inp" id="heAboutB" rows="4" maxlength="800">${esc(st.about.body)}</textarea></div>
+    <div class="field"><label>Colophon facts <span style="text-transform:none;color:var(--faint)">(one per line: Label :: value)</span></label>
+      <textarea class="inp" id="heFacts" rows="3">${esc(st.about.facts.map(f=>f.join(' :: ')).join('\n'))}</textarea></div></div>
+  <div class="form-sec"><h3>Final statement</h3>
+    <div class="field"><label>Title</label><input class="inp" id="heExpT" value="${esc(st.experience.title)}" maxlength="60"></div>
+    <div class="field"><label>Body</label><textarea class="inp" id="heExpB" rows="2" maxlength="240">${esc(st.experience.body)}</textarea></div></div>
+  <button class="btn" id="heSave">${ic('check')}Save homepage</button>`;
+  $('#heSave').addEventListener('click',()=>{
+    const facts=$('#heFacts').value.split('\n').map(l=>l.split('::').map(s=>s.trim())).filter(f=>f[0]&&f[1]).slice(0,6);
+    try{
+      api.updateHomepage(S.user,{l1:$('#heL1').value,l2:$('#heL2').value,sub:$('#heSub').value,body:$('#heBody').value,cta1:$('#heC1').value,cta2:$('#heC2').value,
+        ticker:$('#heTicker').value,introStatement:$('#heIntro').value,introBody:$('#heIntroB').value,
+        aboutTitle:$('#heAboutT').value,aboutBody:$('#heAboutB').value,facts,expTitle:$('#heExpT').value,expBody:$('#heExpB').value});
+      renderNav();toast('Homepage saved \u2014 live on the public site.','success');
+    }catch(e){toast(e.message,'error');}
+  });
+}
+/* ---------- media library ---------- */
+function dMedia(el){
+  const used=db.media.reduce((s,m)=>s+m.dataUrl.length,0),cap=3.5*1024*1024;
+  el.innerHTML=`<div class="dh"><div><h1>Media Library</h1><p>Images for thumbnails, covers and the logo \u00B7 max 400 KB each.</p></div></div>
+  <div class="drop" id="mDrop" role="button" tabindex="0" aria-label="Upload images">${ic('upload','lg')}<p style="margin-top:10px;font-weight:700">Drop images here, or click to browse</p><p class="hint">PNG \u00B7 JPG \u00B7 GIF \u00B7 WEBP \u2014 validated before storage</p>
+    <input type="file" id="mFile" accept="image/*" multiple hidden></div>
+  <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--faint);letter-spacing:.1em;text-transform:uppercase"><span>Library usage</span><span>${(used/1024).toFixed(0)} KB / ${cap/1024/1024} MB</span></div>
+  <div class="usebar"><i style="width:${Math.min(100,used/cap*100)}%"></i></div>
+  <div class="mgrid">${db.media.map(m=>`<div class="mitem"><div class="mm"><img src="${m.dataUrl}" data-mprev="${m.id}" alt="${esc(m.name)}"></div>
+    <div class="mi"><b>${esc(m.name)}</b><span>${(m.size/1024).toFixed(0)}KB</span>
+    <button class="ibtn" data-mcopy="${m.id}" title="Copy data URL" aria-label="Copy URL">${ic('copy','sm')}</button>
+    <button class="ibtn dng" data-mdel="${m.id}" title="Delete" aria-label="Delete">${ic('trash','sm')}</button></div></div>`).join('')||'<p style="color:var(--muted);grid-column:1/-1;text-align:center;padding:30px 0">Library is empty \u2014 upload your first image.</p>'}</div>`;
+  const inp=$('#mFile'),drop=$('#mDrop');
+  const handle=files=>{[...files].forEach(f=>{
+    if(!f.type.startsWith('image/')||f.size>400*1024){toast(`${f.name}: images only, under 400 KB.`,'error');return;}
+    const r=new FileReader();r.onload=()=>{try{api.addMedia(S.user,{name:f.name,type:f.type,size:f.size,dataUrl:r.result});toast(`Uploaded ${f.name}.`,'success');refreshDash();}catch(e){toast(e.message,'error');}};r.readAsDataURL(f);});};
+  drop.addEventListener('click',()=>inp.click());
+  drop.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();inp.click();}});
+  inp.addEventListener('change',()=>handle(inp.files));
+  ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+  drop.addEventListener('drop',e=>handle(e.dataTransfer.files));
+  el.querySelectorAll('[data-mcopy]').forEach(b=>b.addEventListener('click',()=>{const m=db.media.find(x=>x.id===b.dataset.mcopy);
+    navigator.clipboard?.writeText(m.dataUrl).then(()=>toast('Data URL copied.','success')).catch(()=>toast('Clipboard unavailable.','error'));}));
+  el.querySelectorAll('[data-mdel]').forEach(b=>b.addEventListener('click',()=>{const m=db.media.find(x=>x.id===b.dataset.mdel);
+    confirmDialog({title:'Delete media',message:`Remove <b>${esc(m.name)}</b> from the library?`,confirmLabel:'Delete',danger:true}).then(y=>{if(y){api.deleteMedia(S.user,b.dataset.mdel);toast('Media deleted.','success');refreshDash();}});}));
+  el.querySelectorAll('[data-mprev]').forEach(im=>im.addEventListener('click',()=>{const m=db.media.find(x=>x.id===im.dataset.mprev);if(m)openModal({title:m.name,wide:true,body:`<img src="${m.dataUrl}" style="width:100%;border:1px solid var(--line)" alt="">`});}));
+}
+/* ---------- activity logs ---------- */
+function dLogs(el){
+  const st=S.dash.logs=S.dash.logs||{filter:'all',page:1};
+  const actions=[...new Set(db.auditLogs.map(l=>l.action))];
+  const draw=()=>{
+    let items=st.filter==='all'?db.auditLogs:db.auditLogs.filter(l=>l.action===st.filter);
+    const per=10,pages=Math.max(1,Math.ceil(items.length/per));st.page=Math.min(st.page,pages);
+    const view=items.slice((st.page-1)*per,st.page*per);
+    el.innerHTML=`<div class="dh"><div><h1>Activity Logs</h1><p>Immutable audit trail \u00B7 ${db.auditLogs.length} entries \u00B7 secrets are never logged.</p></div>
+      <button class="btn ghost" id="lClear">${ic('trash')}Clear logs</button></div>
+    <div class="toolbar"><select class="sortsel" id="lFilter"><option value="all">All actions</option>${actions.map(a=>`<option value="${a}" ${st.filter===a?'selected':''}>${esc(AUDIT_LABELS[a]||a)}</option>`).join('')}</select></div>
+    <div class="dtable-wrap"><table class="dt" style="min-width:720px"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead><tbody>
+      ${view.map(l=>`<tr><td><span class="sub">${fmtDT(l.createdAt)}</span></td><td><b style="font-weight:600">${esc(l.actorName)}</b></td>
+        <td><span class="pill ${/delete|reset|lock|failed|status|role/.test(l.action)?'dng':'acc'}">${esc(AUDIT_LABELS[l.action]||l.action)}</span></td>
+        <td><span class="sub">${esc(l.entityType)}</span></td><td><span class="sub">${esc(l.meta||'\u2014')}</span></td></tr>`).join('')||'<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:40px">No entries.</td></tr>'}
+    </tbody></table></div><div class="pager" id="lpager"></div>`;
+    $('#lFilter').addEventListener('change',e=>{st.filter=e.target.value;st.page=1;draw();});
+    if(pages>1){const pg=$('#lpager');pg.innerHTML=`<button ${st.page<=1?'disabled':''} data-pg="${st.page-1}">${ic('chevL','sm')}</button>`+Array.from({length:pages},(_,i)=>`<button class="${st.page===i+1?'on':''}" data-pg="${i+1}">${i+1}</button>`).join('')+`<button ${st.page>=pages?'disabled':''} data-pg="${st.page+1}">${ic('chevR','sm')}</button>`;
+      pg.querySelectorAll('[data-pg]').forEach(b=>b.addEventListener('click',()=>{st.page=+b.dataset.pg;draw();}));}
+    $('#lClear').addEventListener('click',async()=>{if(await confirmDialog({title:'Clear audit logs',message:'Erase the entire audit trail? This is itself logged.',confirmLabel:'Clear logs',danger:true})){api.clearLogs(S.user);toast('Logs cleared.','success');draw();}});
+  };
+  draw();
+}
+/* ---------- settings ---------- */
+function dSettings(el){
+  const st=db.settings;
+  el.innerHTML=`<div class="dh"><div><h1>Settings</h1><p>Platform configuration, data safety, and the extension workflow.</p></div></div>
+  <div class="form-sec"><h3>General</h3><div class="fgrid">
+    <div class="field"><label>Session duration in hours (only when "keep me signed in" is unchecked)</label><input class="inp" id="seHours" type="number" min="1" max="8766" value="${st.sessionHours}"></div>
+    <div class="field"><label>Dashboard rows per page</label><input class="inp" id="sePer" type="number" min="4" max="48" value="${st.itemsPerPage}"></div>
+    <div class="field full"><label class="cb" style="margin-top:8px"><input type="checkbox" id="seReg" ${st.allowRegistration?'checked':''}><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Allow public registration (creates read-only USER accounts, rate-limited)</label></div>
+  </div><button class="btn sm" id="seSave" style="margin-top:18px">${ic('check')}Save settings</button></div>
+  <div class="form-sec"><h3>Data & backup</h3><div style="display:flex;gap:12px;flex-wrap:wrap">
+    <button class="btn ghost sm" id="seExport">${ic('download')}Export backup (JSON)</button>
+    <button class="btn ghost sm" id="seImport">${ic('upload')}Import backup</button><input type="file" id="seFile" accept="application/json" hidden>
+    <button class="btn danger sm" id="seReset">${ic('refresh')}Factory reset</button></div>
+    <p class="hint" style="margin-top:12px">Exports contain password <b>hashes</b> \u2014 never plaintext \u2014 plus all content and settings. Keep the file private.</p></div>
+  <div class="form-sec"><h3>Sessions & ownership</h3><div class="dev-note">
+    <p>With <b>Keep me signed in</b> checked at login (the default), sessions have <b>no expiry</b> \u2014 they remain valid until the user signs out, or the account is disabled or deleted. The hour field above applies only to sign-ins where that box was unchecked.</p>
+    <p style="margin-top:8px">The account <code>@${OWNER_ID}</code> is the platform <b>owner</b>: role <code>SUPER_ADMIN</code> with unconditional access to every area \u2014 websites, projects, users, appearance, homepage, media, logs and settings. This cannot be revoked: owner rights are restored automatically on every load and after any backup import, and the owner cannot be demoted, disabled, or deleted through the API.</p></div></div>
+  <div class="form-sec"><h3>Developer notes \u00B7 extension workflow</h3><div class="dev-note">
+    <p>Source & repository: <a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')} github.com/UNFOTABLE01/unfotable</a></p>
+    <p style="margin-top:8px">This build keeps its schema in <code>db.version</code>. To extend it: (1) add the field in <code>seedDB()</code> and the matching editor UI, (2) bump <code>version</code> and migrate existing records on <code>loadDB()</code>, (3) gate writes behind a capability in <code>CAPS</code>. Visual editors here intentionally cover <em>content and appearance</em> only \u2014 structural changes belong in code.</p>
+    <p style="margin-top:10px">For a server deployment, this same shape maps 1:1 onto PostgreSQL via Prisma \u2014 <code>Users</code>, <code>Websites</code>, <code>Projects</code>, <code>Categories</code>, <code>SiteSettings</code>, <code>AuditLogs</code> \u2014 with sessions as httpOnly cookies and hashing moved to Argon2id.</p></div></div>`;
+  $('#seSave').addEventListener('click',()=>{try{api.updateSettings(S.user,{sessionHours:$('#seHours').value,itemsPerPage:$('#sePer').value,allowRegistration:$('#seReg').checked});toast('Settings saved.','success');}catch(e){toast(e.message,'error');}});
+  $('#seExport').addEventListener('click',()=>{audit(S.user.id,S.user.username,'data.export','system','db','Backup downloaded');saveDB();
+    const blob=new Blob([JSON.stringify(db,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`unfotable-backup-${new Date().toISOString().slice(0,10)}.json`;a.click();URL.revokeObjectURL(a.href);
+    toast('Backup exported.','success');});
+  $('#seImport').addEventListener('click',()=>$('#seFile').click());
+  $('#seFile').addEventListener('change',()=>{const f=$('#seFile').files[0];if(!f)return;
+    const r=new FileReader();r.onload=async()=>{try{const obj=JSON.parse(r.result);
+      if(await confirmDialog({title:'Import backup',message:'This <b>replaces all current data</b> with the backup file. Continue?',confirmLabel:'Import & replace',danger:true})){
+        try{api.importData(S.user,obj);toast('Backup imported.','success');renderNav();applyIdentity();location.hash='#/dashboard';renderDashboard('dashboard');}
+        catch(e){toast(e.message,'error');}}}
+      catch(err){toast('That file could not be parsed as JSON.','error');}};
+    r.readAsText(f);});
+  $('#seReset').addEventListener('click',async()=>{
+    if(await confirmDialog({title:'Factory reset',message:'Erase <b>everything</b> \u2014 accounts, content, media, logs \u2014 and return to first-run setup?',confirmLabel:'Erase & reset',danger:true})){
+      api.resetAll(S.user);S.user=null;applyIdentity();toast('Factory reset complete. Provision a new administrator.','success');location.hash='#/login';renderLogin();}
+  });
+}
+
+/* ================================================================
+   ROUTER + BOOT
+   ================================================================ */
+function route(){return location.hash.replace(/^#\/?/,'')||'home';}
+function navigate(){
+  killMotion();document.body.classList.remove('menu-open');
+  while(modalStack.length)closeModal();
+  const r=route();
+  if(r==='setup'){if(db.provisioned){location.hash='#/login';return;}renderSetup();return;}
+  if(r==='login'){if(sessionState()){location.hash='#/dashboard';return;}renderLogin();return;}
+  if(r.startsWith('dashboard')){
+    const s=sessionState();
+    if(!s){toast('Please sign in to continue.');location.hash='#/login';return;}
+    S.user=s.user;S.session=s.session;renderDashboard(r);magnetic();return;
+  }
+  S.user=(sessionState()||{}).user||null;
+  renderHome();magnetic();
+}
+window.addEventListener('hashchange',()=>{window.scrollTo(0,0);navigate();});
+setInterval(()=>{
+  if(route().startsWith('dashboard')&&!sessionState()){toast('Session expired. Sign in again.');location.hash='#/login';}
+},60000);
+/* safety net: surface unexpected errors instead of failing silently */
+window.addEventListener('error',e=>{try{toast('Unexpected error: '+(e.message||'unknown'),'error');}catch(_){}});
+window.addEventListener('unhandledrejection',e=>{try{const r=e.reason;toast('Unexpected error: '+((r&&r.message)||'async failure'),'error');}catch(_){}});
+/* loader wordmark: site name + green full stop */
+(function(){const w=$('#ldWord');const t=db.settings.siteTitle;
+ w.innerHTML=[...t].map(c=>`<i>${esc(c)}</i>`).join('')+'<i class="ld-dot"></i>';})();
+/* boot — with fail-safe so a black screen is impossible */
+(function boot(){
+  try{
+    applyTheme(LS.get('unfotable_theme')||db.settings.defaultTheme||'dark');
+    applyIdentity();
+    const s=sessionState();S.user=s?s.user:null;S.session=s?s.session:null;
+    renderNav();navigate();
+    if(RM||!window.gsap){const l=$('#loader');if(l)l.remove();document.body.classList.add('loaded');}
+    else{
+      if(window.ScrollTrigger)gsap.registerPlugin(ScrollTrigger);
+      const letters=$$('#ldWord i');
+      gsap.set(letters,{yPercent:120});
+      gsap.timeline({onComplete(){$('#loader')?.remove();document.body.classList.add('loaded');}})
+        .to(letters,{yPercent:0,duration:.8,stagger:.05,ease:'power4.out'},.15)
+        .fromTo('.ld-line',{scaleX:0},{scaleX:1,duration:.8,ease:'power3.inOut'},.3)
+        .to('#loader',{yPercent:-100,duration:.8,ease:'power4.inOut'},'+=.3');
+    }
+  }catch(err){
+    const l=$('#loader');if(l)l.remove();document.body.classList.add('loaded');
+    $('#view').innerHTML='<div style="min-height:100svh;display:grid;place-items:center;text-align:center;padding:24px"><div><h1 style="font-family:\'Playfair Display\',serif;font-size:36px">UNFOTABLE<span class="dot"></span></h1><p style="color:var(--muted);margin-top:12px">Startup problem: '+esc(err.message)+'</p><button class="btn sm" style="margin-top:20px" onclick="try{localStorage.clear()}catch(e){};location.reload()">Reset & reload</button></div></div>';
+  }
 })();
