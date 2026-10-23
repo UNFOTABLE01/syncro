@@ -79,10 +79,12 @@ h1,h2,h3,h4{font-weight:500}
 .nav-link::after{content:"";position:absolute;left:0;bottom:0;height:5px;width:100%;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='5' viewBox='0 0 60 5'%3E%3Cpath d='M1 3.5C12 1.5 24 4.2 34 2.6 44 1.2 54 3.4 59 2.4' fill='none' stroke='%237FB069' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat center/100% 100%;transform:scaleX(0);transform-origin:left;transition:transform .35s var(--e)}
 .nav-link:hover::after{transform:scaleX(1)}
 .nav-right{margin-left:auto;display:flex;align-items:center;gap:12px}
-.ic-moon{display:contents}
-.tgl{width:36px;height:36px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;color:var(--muted);transition:.3s}
-.tgl:hover{color:var(--ink);border-color:var(--line-strong)}
+/* theme icon visibility — class-driven, no inline styles (v1.4 fix) */
+.ic-sun,.ic-moon{display:contents}
 :root[data-theme="dark"] .ic-sun,:root[data-theme="light"] .ic-moon{display:none}
+.tgl{width:36px;height:36px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;color:var(--muted);transition:.3s}
+a.tgl{display:grid}
+.tgl:hover{color:var(--ink);border-color:var(--line-strong)}
 .btn{display:inline-flex;align-items:center;gap:10px;background:var(--ink);color:var(--bg);font-weight:700;font-size:13px;letter-spacing:.08em;text-transform:uppercase;padding:14px 26px;border-radius:2px;transition:background .3s var(--e),color .3s;white-space:nowrap}
 .btn .ic{transition:transform .3s var(--e)}
 .btn:hover{background:var(--accent);color:var(--accent-ink)}
@@ -103,6 +105,7 @@ body.menu-open .mmenu{opacity:1;pointer-events:auto}
 body.menu-open .mmenu a{opacity:1;transform:none}
 .mmenu a:nth-child(2){transition-delay:.06s}.mmenu a:nth-child(3){transition-delay:.12s}.mmenu a:nth-child(4){transition-delay:.18s}.mmenu a:nth-child(5){transition-delay:.24s}
 .mmenu .mmeta{margin-top:34px;display:flex;justify-content:space-between;color:var(--muted);font-size:12px;letter-spacing:.15em;text-transform:uppercase}
+.mmenu .mmeta a{display:inline-flex;align-items:center;gap:8px;letter-spacing:.15em;font-family:var(--sans);font-size:12px}
 /* ============ CHAPTER RAIL ============ */
 .chapters{position:fixed;left:26px;top:50%;transform:translateY(-50%);z-index:90;display:flex;flex-direction:column;gap:18px}
 .chap{display:flex;align-items:center;gap:10px;color:var(--faint);transition:color .4s}
@@ -312,6 +315,8 @@ footer{border-top:1px solid var(--line);padding:70px 0 34px;position:relative}
 .f-col a:hover,.f-col button:hover{color:var(--accent)}
 .f-word{font-family:var(--serif);font-weight:600;font-size:clamp(58px,12.5vw,186px);line-height:.95;letter-spacing:-.01em;text-align:center;padding:20px 0 10px;user-select:none}
 .f-bottom{display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid var(--line);padding-top:26px;flex-wrap:wrap;color:var(--faint);font-size:12px}
+.f-bottom a{display:inline-flex;align-items:center;gap:8px;transition:color .25s}
+.f-bottom a:hover{color:var(--accent)}
 .to-top{width:46px;height:46px;border:1px solid var(--line-strong);border-radius:50%;display:grid;place-items:center;color:var(--ink-dim);transition:.3s}
 .to-top:hover{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 @media(max-width:760px){.f-top{grid-template-columns:1fr 1fr}}
@@ -335,7 +340,7 @@ footer{border-top:1px solid var(--line);padding:70px 0 34px;position:relative}
 .pw-wrap .inp{padding-right:46px}
 .pw-eye{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:34px;height:34px;display:grid;place-items:center;color:var(--faint)}
 .pw-eye:hover{color:var(--ink)}
-.aux{display:flex;justify-content:space-between;align-items:center;margin:4px 0 24px;font-size:12.5px;color:var(--muted)}
+.aux{display:flex;justify-content:space-between;align-items:center;margin:4px 0 8px;font-size:12.5px;color:var(--muted)}
 .cb{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
 .cb input{position:absolute;opacity:0}
 .cb i{width:16px;height:16px;border:1px solid var(--line-strong);display:grid;place-items:center;transition:.2s;flex:none}
@@ -512,9 +517,19 @@ table.dt{width:100%;border-collapse:collapse;min-width:760px}
 "use strict";
 document.documentElement.classList.add('js');
 /* ================================================================
-   UNFOTABLE — single-file application (v1.3)
-   v1.3: GitHub repo connection (nav · footer · dashboard · settings)
-         + permanent owner guard: devanshu always SUPER_ADMIN, full access
+   UNFOTABLE — single-file application (v1.4)
+   v1.4 fixes:
+   · CRITICAL: sidebar highlight crashed on the Logout button (no href)
+     → dashboard rendered blank after login. Guarded.
+   · Sessions: "keep me signed in" = no expiry, until sign-out or
+     account deletion. New owner-only "Delete account" control.
+   · Footer theme icons both showing (inline style beat the CSS) — fixed.
+   · Connection-diagram bottom labels were clipped by the viewBox — fixed.
+   · ADMIN saw manage buttons the API would reject — now permission-matched.
+   · Thumbnail: picking from the library then typing a URL kept the
+     library image — manual input now overrides correctly.
+   · Overview quick-links shown without permission — now capability-guarded.
+   · Global error toasts + boot fail-safe: no silent failures / black screens.
    Layers: crypto → db → auth/api (authorization-gated) → UI
    ================================================================ */
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -663,7 +678,7 @@ function seedDB(){
       connect:{body:'Each entry in the directory links back to this single point of origin. One hub, many orbits.'},
       directory:{body:'Live websites, indexed like a personal archive. Search, filter, and open any project in seconds.'},
       projectsSec:{body:'Selected builds and experiments — from first commit to published release.'},
-      control:{features:[['grid','Directory CRUD','Add, edit and retire website entries with categories, tags and publish state.'],['users','People & roles','Create accounts, assign roles, disable access, revoke sessions.'],['palette','Appearance','Tune wordmark, accent, navigation and homepage copy — no code required.'],['shield','Audit trail','Every sensitive action is logged with actor, target and timestamp.']]},
+      control:{features:[['grid','Directory CRUD','Add, edit and retire website entries with categories, tags and publish state.'],['users','People & roles','Create accounts, assign roles, disable or delete access, revoke sessions.'],['palette','Appearance','Tune wordmark, accent, navigation and homepage copy — no code required.'],['shield','Audit trail','Every sensitive action is logged with actor, target and timestamp.']]},
       about:{title:'Designed & built by Devanshu.',body:'I design and build digital things — websites, tools, and small systems with careful typography. UNFOTABLE is the front door to all of them: a personal headquarters that stays out of the way and lets the work speak.',facts:[['Based in','Earth \u00B7 UTC+5:30'],['Focus','Design engineering \u00B7 Web'],['Source','github.com/UNFOTABLE01'],['Currently','Shipping quietly']]},
       experience:{title:'Build once. Link forever.',body:'Every new site joins the constellation. Start with the dashboard, or explore the universe first.'},
       footer:{note:'everything, in one place.',socials:[
@@ -691,7 +706,7 @@ function loadDB(){
     const raw=LS.get(DBKEY);
     if(raw){
       const d=JSON.parse(raw);
-      if(d&&d.version===1)return repairDB(d);
+      if(d&&d.version===1){repairDB(d);LS.set(DBKEY,JSON.stringify(d));return d;}
     }
   }catch(e){}
   const d=seedDB();LS.set(DBKEY,JSON.stringify(d));return d;
@@ -709,7 +724,7 @@ const CAPS={websites_manage:['SUPER_ADMIN','ADMIN','EDITOR'],projects_manage:['S
 const can=(u,cap)=>!!u&&u.status==='active'&&(u.role==='SUPER_ADMIN'||(CAPS[cap]||[]).includes(u.role));
 
 /* ---------------- audit ---------------- */
-const AUDIT_LABELS={'system.seed':'System seeded','auth.login':'Signed in','auth.logout':'Signed out','auth.failed':'Failed sign-in','auth.lock':'Sign-in lockout triggered','user.create':'Created user','user.register':'Registered account','user.role':'Changed role','user.status':'Changed account status','user.reset':'Reset password','user.sessions':'Revoked sessions','password.change':'Changed password','website.create':'Created website','website.update':'Updated website','website.delete':'Deleted website','website.fav':'Toggled favorite','website.publish':'Toggled publishing','project.create':'Created project','project.update':'Updated project','project.delete':'Deleted project','project.status':'Changed project status','settings.appearance':'Updated appearance','settings.homepage':'Updated homepage','settings.general':'Updated settings','media.upload':'Uploaded media','media.delete':'Deleted media','logs.clear':'Cleared audit logs','data.export':'Exported data','data.import':'Imported data','data.reset':'Factory reset'};
+const AUDIT_LABELS={'system.seed':'System seeded','auth.login':'Signed in','auth.logout':'Signed out','auth.failed':'Failed sign-in','auth.lock':'Sign-in lockout triggered','user.create':'Created user','user.register':'Registered account','user.role':'Changed role','user.status':'Changed account status','user.reset':'Reset password','user.sessions':'Revoked sessions','user.delete':'Deleted user account','password.change':'Changed password','website.create':'Created website','website.update':'Updated website','website.delete':'Deleted website','website.fav':'Toggled favorite','website.publish':'Toggled publishing','project.create':'Created project','project.update':'Updated project','project.delete':'Deleted project','project.status':'Changed project status','settings.appearance':'Updated appearance','settings.homepage':'Updated homepage','settings.general':'Updated settings','media.upload':'Uploaded media','media.delete':'Deleted media','logs.clear':'Cleared audit logs','data.export':'Exported data','data.import':'Imported data','data.reset':'Factory reset'};
 function audit(actorId,actorName,action,entityType,entityId,meta){
   db.auditLogs.unshift({id:uid('l'),actorId,actorName,action,entityType,entityId,meta:meta||'',createdAt:now()});
   if(db.auditLogs.length>500)db.auditLogs.length=500;
@@ -721,7 +736,8 @@ const acct=(u)=>({id:u.id,username:u.username,displayName:u.displayName,role:u.r
 function sessionState(){
   const tok=LS.get(SESSKEY); if(!tok)return null;
   const s=db.sessions.find(x=>x.token===tok); if(!s){LS.del(SESSKEY);return null;}
-  if(s.expiresAt<now()){db.sessions=db.sessions.filter(x=>x.token!==tok);saveDB();LS.del(SESSKEY);return null;}
+  /* expiresAt === -1 means a persistent session: valid until sign-out or account deletion */
+  if(s.expiresAt>0&&s.expiresAt<now()){db.sessions=db.sessions.filter(x=>x.token!==tok);saveDB();LS.del(SESSKEY);return null;}
   const u=db.users.find(x=>x.id===s.userId);
   if(!u||u.status!=='active'){db.sessions=db.sessions.filter(x=>x.userId===s.userId);saveDB();LS.del(SESSKEY);return null;}
   return {user:u,session:s};
@@ -740,11 +756,13 @@ async function apiLogin(username,password,remember){
     return{ok:false,error:rec.until>now()?`Too many attempts. Locked for ${Math.ceil((rec.until-now())/1000)}s.`:'Invalid username or password.'};
   }
   delete db.loginAttempts[key];
-  const hours=remember?24*30:(db.settings.sessionHours||12);
-  const s={token:randToken(),userId:u.id,createdAt:now(),expiresAt:now()+hours*36e5};
+  /* "keep me signed in" → persistent session (expiresAt = -1, no expiry).
+     Without it, the configurable session-hours window applies. */
+  const hours=remember?0:(db.settings.sessionHours||12);
+  const s={token:randToken(),userId:u.id,createdAt:now(),expiresAt:remember?-1:now()+hours*36e5};
   db.sessions.push(s); u.lastLoginAt=now(); saveDB();
   LS.set(SESSKEY,s.token);
-  audit(u.id,u.username,'auth.login','user',u.id,remember?'Remembered session':'Session created');
+  audit(u.id,u.username,'auth.login','user',u.id,remember?'Persistent session — active until sign-out or account deletion':'Timed session created');
   return{ok:true,user:u};
 }
 function apiLogout(){const st=sessionState();if(st){db.sessions=db.sessions.filter(x=>x.token!==st.session.token);audit(st.user.id,st.user.username,'auth.logout','user',st.user.id,'');saveDB();}LS.del(SESSKEY);S.user=null;S.session=null;}
@@ -825,6 +843,13 @@ const api={
    t.status=status;t.updatedAt=now();
    if(status==='disabled')db.sessions=db.sessions.filter(x=>x.userId!==t.id);
    audit(u.id,u.username,'user.status','user',t.id,`${t.username} \u2192 ${status}`);saveDB();},
+ deleteUser(u,id){requirePerm(u,'users_manage');
+   const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
+   if(t.isOwner||t.id===u.id)throw new Error('The owner account cannot be deleted.');
+   db.users=db.users.filter(x=>x.id!==id);
+   db.sessions=db.sessions.filter(x=>x.userId!==id);
+   delete db.loginAttempts[t.username];
+   audit(u.id,u.username,'user.delete','user',id,`@${t.username} deleted — sessions ended, ID freed`);saveDB();},
  async resetPassword(u,id){requirePerm(u,'users_manage');
    const t=db.users.find(x=>x.id===id); if(!t)throw new Error('User not found.');
    const tmp=genTempPw(); t.passwordHash=await hashPassword(tmp); t.mustChangePassword=true; t.updatedAt=now();
@@ -865,7 +890,7 @@ const api={
    const h=parseInt(data.sessionHours,10); if(h>=1&&h<=24*365)st.sessionHours=h;
    const pp=parseInt(data.itemsPerPage,10); if(pp>=4&&pp<=48)st.itemsPerPage=pp;
    st.allowRegistration=!!data.allowRegistration;
-   audit(u.id,u.username,'settings.general','settings','general',`session=${st.sessionHours}h, registration=${st.allowRegistration}`);saveDB();},
+   audit(u.id,u.username,'settings.general','settings','general',`timed-session=${st.sessionHours}h, registration=${st.allowRegistration}`);saveDB();},
  addMedia(u,m){requirePerm(u,'media_manage');
    if(!m.type.startsWith('image/'))throw new Error('Only image files can be uploaded.');
    if(m.size>400*1024)throw new Error('Images must be under 400 KB.');
@@ -885,7 +910,7 @@ const api={
    if(!obj.users.every(x=>x.username&&x.passwordHash&&x.role))throw new Error('Backup user records are incomplete.');
    const curToken=LS.get(SESSKEY),curId=S.user?S.user.id:null;
    db=repairDB(obj);saveDB();
-   if(curToken&&curId&&db.users.some(x=>x.id===curId)){db.sessions.push({token:curToken,userId:curId,createdAt:now(),expiresAt:now()+36e5});saveDB();S.user=db.users.find(x=>x.id===curId);}
+   if(curToken&&curId&&db.users.some(x=>x.id===curId)){db.sessions.push({token:curToken,userId:curId,createdAt:now(),expiresAt:-1});saveDB();S.user=db.users.find(x=>x.id===curId);}
    else{LS.del(SESSKEY);S.user=null;S.session=null;}
    audit(S.user?S.user.id:null,S.user?S.user.username:'unknown','data.import','system','db',`Imported backup (${db.websites.length} websites, ${db.users.length} users)`);saveDB();},
  resetAll(u){requirePerm(u,'settings');LS.del(SESSKEY);LS.del(DBKEY);db=seedDB();saveDB();}
@@ -984,7 +1009,7 @@ function renderNav(){
     </div></div>`;
   $('#mmenu').innerHTML=links.map(([id,l])=>`<a href="#/" data-scroll="${id}">${esc(l)}${ic('upright')}</a>`).join('')
     +(logged?`<a href="#/dashboard">Dashboard${ic('upright')}</a>`:`<a href="#/login">Login${ic('upright')}</a>`)
-    +`<div class="mmeta"><span>${esc(st.siteTitle)}<span class="dot" style="margin:0 .5em 0 .3em"></span>HQ</span><a href="${GH_URL}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px">${ic('github','sm')}GitHub</a></div>`;
+    +`<div class="mmeta"><span>${esc(st.siteTitle)}<span class="dot" style="margin:0 .5em 0 .3em"></span>HQ</span><a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')}GitHub</a></div>`;
 }
 document.addEventListener('click',e=>{
   const sc=e.target.closest('[data-scroll]');
@@ -1181,12 +1206,12 @@ function renderHome(){
         <p class="f-note"><b class="dot" style="margin:0 .5em 0 0;transform:translateY(-.02em)"></b><span>${esc(st.footer.note)}</span></p></div>
       <div class="f-col"><h5>Navigate</h5>${[['s-hero',st.nav.home],['s-collection',st.nav.websites],['s-projects',st.nav.projects],['s-about',st.nav.about]].map(([id,l])=>`<a href="#/" data-scroll="${id}">${esc(l)}</a>`).join('')}</div>
       <div class="f-col"><h5>Elsewhere</h5>${st.footer.socials.map(s=>s.url?`<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${ic(s.key in I?s.key:'globe')}${esc(s.label)}</a>`:'').join('')}
-        <button data-action="theme"><span class="ic-moon" style="display:contents">${ic('moon')}</span><span class="ic-sun" style="display:contents">${ic('sun')}</span>Theme: <span id="fTheme">${document.documentElement.dataset.theme}</span></button></div>
+        <button data-action="theme"><span class="ic-sun">${ic('sun')}</span><span class="ic-moon">${ic('moon')}</span>Theme: <span id="fTheme">${document.documentElement.dataset.theme}</span></button></div>
     </div>
     <div class="f-word" aria-hidden="true">${esc(st.siteTitle)}<span class="dot"></span></div>
     <div class="f-bottom">
       <span>\u00A9 ${new Date().getFullYear()} Devanshu \u00B7 ${esc(st.siteTitle)}. All rights reserved.</span>
-      <a href="${GH_URL}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px;transition:color .25s" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color=''">${ic('github','sm')}github.com/UNFOTABLE01/unfotable</a>
+      <a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')}github.com/UNFOTABLE01/unfotable</a>
       <button class="to-top" data-action="top" aria-label="Back to top">${ic('up')}</button>
     </div>
   </div></footer>`;
@@ -1274,9 +1299,9 @@ function openProjectDetail(id){
     foot:`${p.demoUrl?`<button class="btn ghost sm" data-open="${esc(p.demoUrl)}">${ic('ext')}Live demo</button>`:''}${p.sourceUrl?`<button class="btn ghost sm" data-open="${esc(p.sourceUrl)}">${ic('github')}Source</button>`:''}<button class="btn sm" data-mclose-x>Close</button>`});
   m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
 }
-/* ---- connection diagram ---- */
+/* ---- connection diagram (cy/H tuned in v1.4 so bottom labels never clip) ---- */
 function buildDiagram(sites){
-  const W=1000,H=480,cx=W/2,cy=H/2,n=Math.max(sites.length,4);
+  const W=1000,H=500,cx=W/2,cy=245,n=Math.max(sites.length,4);
   const nodes=[];
   for(let i=0;i<n;i++){
     const ang=(-90+i*(360/Math.min(n,7))+(i>6?180:0))*Math.PI/180;
@@ -1289,7 +1314,7 @@ function buildDiagram(sites){
     return `<path class="cn-path" d="M${cx},${cy} Q${mx.toFixed(0)},${my.toFixed(0)} ${p.x.toFixed(0)},${p.y.toFixed(0)}" style="transition-delay:${i*0.12}s"></path>
       <circle class="cn-node" cx="${p.x.toFixed(0)}" cy="${p.y.toFixed(0)}" r="5" style="transition-delay:${0.5+i*0.12}s"></circle>
       ${p.dot?`<circle class="cn-dot" cx="${p.x.toFixed(0)}" cy="${p.y.toFixed(0)}" r="2" style="transition-delay:${0.55+i*0.12}s"></circle>`:''}
-      <text class="cn-lbl" x="${p.x+dx}" y="${p.y+4}" text-anchor="${anchor}" style="transition-delay:${0.65+i*0.12}s">${esc(p.label.length>22?p.label.slice(0,21)+'\u2026':p.label)}</text>`;
+      <text class="cn-lbl" x="${(p.x+dx).toFixed(0)}" y="${(p.y+4).toFixed(0)}" text-anchor="${anchor}" style="transition-delay:${0.65+i*0.12}s">${esc(p.label.length>22?p.label.slice(0,21)+'\u2026':p.label)}</text>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Diagram: every website connected to the UNFOTABLE hub">
     <circle class="cn-ring" cx="${cx}" cy="${cy}" r="46"/><circle class="cn-core" cx="${cx}" cy="${cy}" r="30"/>
@@ -1385,7 +1410,7 @@ function renderLogin(){
     <div class="auth-brand">
       <a href="#/" class="brand"><span class="mono">${esc(st.monogram)}</span><span>${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></span></a>
       <div>${ic('lock','lg')}<h2 style="margin-top:18px">The door to the <em>control room.</em></h2></div>
-      <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)">PBKDF2 \u00B7 hashed \u00B7 expiring sessions</div>
+      <div style="font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint)">PBKDF2 \u00B7 hashed \u00B7 persistent sessions</div>
     </div>
     <div class="auth-form"><div class="af-box" id="authBox">
       ${!db.provisioned?`<div class="prov-note">${ic('shield')}<span><b>First run:</b> no administrator exists yet. <button id="goSetup" style="color:var(--accent);font-weight:800">Provision the administrator account \u2192</button></span></div>`:''}
@@ -1397,7 +1422,8 @@ function renderLogin(){
           <div class="pw-wrap"><input class="inp" id="liPass" type="password" autocomplete="current-password">
           <button type="button" class="pw-eye" id="liEye" aria-label="Show password">${ic('eye','sm')}</button></div>
           <div class="ferr"></div></div>
-        <div class="aux"><label class="cb"><input type="checkbox" id="liRem"><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Remember me for 30 days</label></div>
+        <div class="aux"><label class="cb"><input type="checkbox" id="liRem" checked><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Keep me signed in until I sign out</label></div>
+        <p class="hint" style="margin:-10px 0 22px">Sessions never expire while your account exists — they end only when you sign out, or when the account is disabled or deleted.</p>
         <button class="btn btn-block" id="liBtn" type="submit">Sign in${ic('right')}</button>
       </form>
       <div class="auth-foot">${reg?`<button id="regTab">Need an account? <b style="color:var(--accent)">Create one</b></button> \u00B7 `:''}<a href="#/">Back to site</a></div>
@@ -1471,7 +1497,7 @@ async function renderSetup(){
     <h1>Secure setup</h1><p class="sub">This runs once. The password you choose is hashed with PBKDF2-SHA256 (50,000 iterations) and never stored or logged in plaintext. This account becomes the permanent owner with full, unconditional control.</p>
     <div class="alert" id="suAlert" role="alert"></div>
     <form id="suForm" novalidate>
-      <div class="field"><label for="suUser">Administrator ID</label><input class="inp" id="suUser" value="${OWNER_ID}" readonly style="opacity:.75"><div class="hint">Locked by configuration \u2014 role: SUPER_ADMIN \u00B7 owner: full platform control, cannot be demoted or disabled.</div></div>
+      <div class="field"><label for="suUser">Administrator ID</label><input class="inp" id="suUser" value="${OWNER_ID}" readonly style="opacity:.75"><div class="hint">Locked by configuration \u2014 role: SUPER_ADMIN \u00B7 owner: full platform control, cannot be demoted, disabled, or deleted.</div></div>
       <div class="field"><label for="suName">Display name</label><input class="inp" id="suName" value="Devanshu"><div class="ferr"></div></div>
       <div class="field"><label for="suPass">Master password</label><input class="inp" id="suPass" type="password" autocomplete="new-password" autofocus>${meterHTML('suMeter')}<div class="ferr"></div></div>
       <div class="field"><label for="suPass2">Confirm password</label><input class="inp" id="suPass2" type="password" autocomplete="new-password"><div class="ferr"></div></div>
@@ -1491,7 +1517,7 @@ async function renderSetup(){
     const btn=$('#suBtn');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Hashing & provisioning\u2026';
     const nu={id:uid('u'),username:OWNER_ID,displayName:nm||'Devanshu',passwordHash:await hashPassword(pw),role:'SUPER_ADMIN',status:'active',createdAt:now(),updatedAt:now(),lastLoginAt:null,mustChangePassword:false,isOwner:true};
     db.users.push(nu);db.provisioned=true;
-    const s={token:randToken(),userId:nu.id,createdAt:now(),expiresAt:now()+12*36e5};
+    const s={token:randToken(),userId:nu.id,createdAt:now(),expiresAt:-1};
     db.sessions.push(s);LS.set(SESSKEY,s.token);
     nu.lastLoginAt=now();
     audit(nu.id,OWNER_ID,'user.create','user',nu.id,'Owner (SUPER_ADMIN) provisioned during setup');
@@ -1576,7 +1602,8 @@ function renderDashSub(sub){
   S.sub=DASH_NAV.some(n=>n[0]===sub)?sub:'overview';
   const lockNav=[['users','users_view'],['appearance','appearance'],['homepage','homepage_edit'],['media','media_manage'],['logs','logs_view'],['settings','settings']];
   for(const[k,cap]of lockNav)if(S.sub===k&&!can(S.user,cap)){toast('Your role does not include that area.','error');S.sub='overview';break;}
-  $$('.dlink').forEach(a=>{const k=a.getAttribute('href').split('/')[2];a.classList.toggle('on',k===S.sub);});
+  /* v1.4 fix: the Logout button has no href — guard against null before split */
+  $$('.dlink').forEach(a=>{const h=a.getAttribute('href');a.classList.toggle('on',!!h&&h.split('/')[2]===S.sub);});
   $('#dCrumb').textContent=(DASH_NAV.find(n=>n[0]===S.sub)||['','Overview'])[1];
   const c=$('#dashContent');
   ({overview:dOverview,websites:dWebsites,projects:dProjects,users:dUsers,appearance:dAppearance,homepage:dHomepage,media:dMedia,logs:dLogs,settings:dSettings})[S.sub](c);
@@ -1590,7 +1617,7 @@ function dOverview(el){
         <div style="padding:8px 18px 16px">
           <div class="kv"><span>User ID</span><b>${esc(user.username)}</b></div><div class="kv"><span>Role</span><b>${esc(user.role)}</b></div>
           <div class="kv"><span>Status</span><b>${esc(user.status)}</b></div><div class="kv"><span>Registered</span><b>${fmtDate(user.createdAt)}</b></div>
-          <div class="kv"><span>Last sign-in</span><b>${user.lastLoginAt?ago(user.lastLoginAt):'\u2014'}</b></div></div></div>
+          <div class="kv"><span>Session</span><b>Until sign-out</b></div></div></div>
       <div class="panel"><div class="panel-h"><h3>Directory at a glance</h3></div>
         <div style="padding:8px 18px 16px">
           <div class="kv"><span>Websites</span><b>${db.websites.filter(w=>w.isPublished).length} published</b></div>
@@ -1606,11 +1633,11 @@ function dOverview(el){
     ['Media',db.media.length,`${(db.media.reduce((s,m)=>s+m.size,0)/1024).toFixed(0)} KB used`]];
   el.innerHTML=`<div class="dh"><div><h1>Overview</h1><p>${user.isOwner?'Owner access \u2014 every capability of the platform is unlocked for this account.':'The state of the whole platform, from real records.'}</p></div></div>
     <div class="stat-strip">${stats.map(([l,n,s])=>`<div class="stat"><span>${l}</span><b>${n}</b><em>${esc(s)}</em></div>`).join('')}</div>
-    <div class="qa-row"><button class="btn sm" data-qa="w">${ic('plus')}Add website</button><button class="btn ghost sm" data-qa="p">${ic('plus')}New project</button><a class="btn ghost sm" href="#/dashboard/homepage">${ic('file')}Edit homepage</a><a class="btn ghost sm" href="#/dashboard/appearance">${ic('palette')}Appearance</a><a class="btn ghost sm" href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github')}GitHub repo</a></div>
+    <div class="qa-row"><button class="btn sm" data-qa="w">${ic('plus')}Add website</button><button class="btn ghost sm" data-qa="p">${ic('plus')}New project</button>${can(user,'homepage_edit')?`<a class="btn ghost sm" href="#/dashboard/homepage">${ic('file')}Edit homepage</a>`:''}${can(user,'appearance')?`<a class="btn ghost sm" href="#/dashboard/appearance">${ic('palette')}Appearance</a>`:''}<a class="btn ghost sm" href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github')}GitHub repo</a></div>
     <div class="dcols">
       <div class="panel"><div class="panel-h"><h3>Recently added websites</h3><a href="#/dashboard/websites" style="font-size:11px;color:var(--accent);font-weight:800;letter-spacing:.1em">VIEW ALL</a></div>
         ${[...db.websites].sort((a,b)=>b.createdAt-a.createdAt).slice(0,5).map(w=>`<div class="prow">${w.thumbnail?`<img src="${esc(w.thumbnail)}" alt="">`:'<img alt="" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">'}<b>${esc(w.title)}</b><span>${esc(catName(w.categoryId))}</span><span>${fmtDate(w.createdAt)}</span></div>`).join('')||'<div class="prow">Nothing yet</div>'}</div>
-      <div class="panel"><div class="panel-h"><h3>Recent activity</h3><a href="#/dashboard/logs" style="font-size:11px;color:var(--accent);font-weight:800;letter-spacing:.1em">FULL LOG</a></div>
+      <div class="panel"><div class="panel-h"><h3>Recent activity</h3>${can(user,'logs_view')?`<a href="#/dashboard/logs" style="font-size:11px;color:var(--accent);font-weight:800;letter-spacing:.1em">FULL LOG</a>`:''}</div>
         ${db.auditLogs.slice(0,5).map(l=>`<div class="prow">${ic('clock','sm')}<b>${esc(AUDIT_LABELS[l.action]||l.action)}</b><span>${esc(l.actorName)}</span><span>${ago(l.createdAt)}</span></div>`).join('')}</div></div>`;
   el.querySelectorAll('[data-qa]').forEach(b=>b.addEventListener('click',()=>b.dataset.qa==='w'?openWebsiteEditor():openProjectEditor()));
 }
@@ -1688,12 +1715,14 @@ function openWebsiteEditor(id){
     </div>`,
     foot:`<button class="btn ghost sm" data-mclose-x>Cancel</button><button class="btn sm" id="wfSave">${w?'Save changes':'Add to directory'}${ic('check')}</button>`});
   m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
-  m.panel.querySelector('#wfThumb').addEventListener('input',e=>{thumb=e.target.value.trim();m.panel.querySelector('#wfPrev').src=thumb||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#wfPrev').style.display=thumb?'block':'none';});
+  /* manual URL input always overrides a library pick (v1.4 fix) */
+  m.panel.querySelector('#wfThumb').addEventListener('input',e=>{delete e.target.dataset.lib;thumb=e.target.value.trim();m.panel.querySelector('#wfPrev').src=thumb||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#wfPrev').style.display=thumb?'block':'none';});
   m.panel.querySelector('#wfPick').addEventListener('click',()=>mediaPicker((mid,src)=>{thumb=src;m.panel.querySelector('#wfThumb').value='(from library)';m.panel.querySelector('#wfPrev').src=src;m.panel.querySelector('#wfPrev').style.display='block';m.panel.querySelector('#wfThumb').dataset.lib=mid;},null));
   m.panel.querySelector('#wfSave').addEventListener('click',()=>{
+    const thumbInp=m.panel.querySelector('#wfThumb');
     const data={title:m.panel.querySelector('#wfTitle').value,url:m.panel.querySelector('#wfUrl').value.trim(),description:m.panel.querySelector('#wfDesc').value,categoryId:m.panel.querySelector('#wfCat').value,
       tags:m.panel.querySelector('#wfTags').value,status:m.panel.querySelector('#wfStatus').value,isFavorite:m.panel.querySelector('#wfFav').checked,isPublished:m.panel.querySelector('#wfPub').checked,
-      thumbnail:m.panel.querySelector('#wfThumb').dataset.lib?mediaUrl(m.panel.querySelector('#wfThumb').dataset.lib):thumb};
+      thumbnail:thumbInp.dataset.lib?mediaUrl(thumbInp.dataset.lib):thumb};
     try{
       if(w)api.updateWebsite(S.user,w.id,data);else api.createWebsite(S.user,data);
       closeModal();toast(w?'Website updated.':'Website added to the directory.','success');
@@ -1757,10 +1786,11 @@ function openProjectEditor(id){
     </div>`,
     foot:`<button class="btn ghost sm" data-mclose-x>Cancel</button><button class="btn sm" id="pfSave">${p?'Save changes':'Create project'}${ic('check')}</button>`});
   m.panel.querySelector('[data-mclose-x]').addEventListener('click',()=>closeModal());
-  m.panel.querySelector('#pfCover').addEventListener('input',e=>{cover=e.target.value.trim();m.panel.querySelector('#pfPrev').src=cover||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#pfPrev').style.display=cover?'block':'none';});
+  m.panel.querySelector('#pfCover').addEventListener('input',e=>{delete e.target.dataset.lib;cover=e.target.value.trim();m.panel.querySelector('#pfPrev').src=cover||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';m.panel.querySelector('#pfPrev').style.display=cover?'block':'none';});
   m.panel.querySelector('#pfPick').addEventListener('click',()=>mediaPicker((mid,src)=>{cover=src;m.panel.querySelector('#pfCover').value='(from library)';m.panel.querySelector('#pfPrev').src=src;m.panel.querySelector('#pfPrev').style.display='block';m.panel.querySelector('#pfCover').dataset.lib=mid;},null));
   m.panel.querySelector('#pfSave').addEventListener('click',()=>{
-    const data={title:m.panel.querySelector('#pfTitle').value,description:m.panel.querySelector('#pfDesc').value,coverImage:m.panel.querySelector('#pfCover').dataset.lib?mediaUrl(m.panel.querySelector('#pfCover').dataset.lib):cover,
+    const coverInp=m.panel.querySelector('#pfCover');
+    const data={title:m.panel.querySelector('#pfTitle').value,description:m.panel.querySelector('#pfDesc').value,coverImage:coverInp.dataset.lib?mediaUrl(coverInp.dataset.lib):cover,
       technologies:m.panel.querySelector('#pfTech').value,demoUrl:m.panel.querySelector('#pfDemo').value.trim(),sourceUrl:m.panel.querySelector('#pfSrc').value.trim(),status:m.panel.querySelector('#pfStatus').value};
     try{
       if(p){delete data.status;api.updateProject(S.user,p.id,data);api.setProjectStatus(S.user,p.id,m.panel.querySelector('#pfStatus').value);}
@@ -1774,30 +1804,30 @@ function openProjectEditor(id){
 function dUsers(el){
   const users=[...db.users].sort((a,b)=>a.createdAt-b.createdAt);
   const me=S.user;
+  const canManage=can(me,'users_manage'); /* SUPER_ADMIN only — matches what the API enforces */
   const rowFor=u=>{
     const self=u.id===me.id;
-    const isSA=u.role==='SUPER_ADMIN';
-    const canEdit=(me.role==='SUPER_ADMIN'||(!isSA&&!self))&&!u.isOwner;
     return `<tr>
       <td><div class="cell-main"><span class="dava" style="background:${self||u.isOwner?'var(--accent)':'var(--bg3)'};color:${self||u.isOwner?'var(--accent-ink)':'var(--ink)'};border:1px solid var(--line)">${esc(u.displayName[0].toUpperCase())}</span>
         <div><b>${esc(u.displayName)}</b><span>@${esc(u.username)}${self?' \u00B7 you':''}</span></div></div></td>
-      <td>${u.isOwner?`<span class="pill acc" title="Owner \u2014 permanent SUPER_ADMIN, protected from changes">Owner \u00B7 ${esc(u.role)}</span>`
+      <td>${u.isOwner?`<span class="pill acc" title="Owner \u2014 permanent SUPER_ADMIN, protected from all changes">Owner \u00B7 ${esc(u.role)}</span>`
         :me.role==='SUPER_ADMIN'&&!self?`<select class="role-sel" data-urole="${u.id}" aria-label="Role of ${esc(u.username)}">${['SUPER_ADMIN','ADMIN','EDITOR','USER'].map(r=>`<option ${u.role===r?'selected':''}>${r}</option>`).join('')}</select>`
         :`<span class="pill acc">${esc(u.role)}</span>`}</td>
       <td><span class="pill ${u.status==='active'?'ok':'dng'}">${u.status}</span></td>
       <td><span class="sub">${fmtDate(u.createdAt)}</span></td>
       <td><span class="sub">${u.lastLoginAt?ago(u.lastLoginAt):'never'}</span></td>
       <td><div style="display:flex;gap:6px;justify-content:flex-end">
-        ${u.isOwner?'<span class="hint" style="margin:0">Protected</span>':canEdit?`<button class="ibtn" data-ureset="${u.id}" title="Reset password (temp credential)">${ic('key','sm')}</button>
+        ${u.isOwner?'<span class="hint" style="margin:0">Protected</span>':self?'<span class="hint" style="margin:0">\u2014</span>':canManage?`<button class="ibtn" data-ureset="${u.id}" title="Reset password (temp credential)">${ic('key','sm')}</button>
         <button class="ibtn" data-usess="${u.id}" title="Revoke sessions">${ic('logout','sm')}</button>
-        <button class="ibtn ${u.status==='active'?'dng':''}" data-ustat="${u.id}" title="${u.status==='active'?'Disable account':'Reactivate account'}">${ic(u.status==='active'?'lock':'check','sm')}</button>`:''}
+        <button class="ibtn ${u.status==='active'?'dng':''}" data-ustat="${u.id}" title="${u.status==='active'?'Disable account':'Reactivate account'}">${ic(u.status==='active'?'lock':'check','sm')}</button>
+        <button class="ibtn dng" data-udel="${u.id}" title="Delete account (ends sessions, frees the ID)">${ic('trash','sm')}</button>`:''}
       </div></td></tr>`;
   };
   el.innerHTML=`<div class="dh"><div><h1>User Management</h1><p>${users.length} registered account${users.length===1?'':'s'} \u00B7 credentials are one-way hashed (PBKDF2).</p></div>
     <button class="btn" id="uAdd">${ic('plus')}Create user</button></div>
   <div class="dtable-wrap"><table class="dt" style="min-width:820px"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Registered</th><th>Last sign-in</th><th style="text-align:right">Actions</th></tr></thead>
   <tbody>${users.map(rowFor).join('')}</tbody></table></div>
-  <p class="hint" style="margin-top:14px">Passwords can never be viewed or retrieved \u2014 only reset to a one-time temporary credential. The owner account (<b>@${OWNER_ID}</b>) holds permanent SUPER_ADMIN control of the entire platform and cannot be demoted, disabled, or locked out \u2014 even by another administrator.</p>`;
+  <p class="hint" style="margin-top:14px">Passwords can never be viewed or retrieved \u2014 only reset to a one-time temporary credential. Sessions persist until sign-out, disabling, or <b>deletion of the account</b>. The owner (<b>@${OWNER_ID}</b>) holds permanent SUPER_ADMIN control and cannot be demoted, disabled, or deleted \u2014 even by another administrator.</p>`;
   $('#uAdd').addEventListener('click',openUserCreator);
   el.querySelectorAll('[data-urole]').forEach(s=>s.addEventListener('change',async()=>{
     const id=s.dataset.urole,u=db.users.find(x=>x.id===id);
@@ -1810,11 +1840,11 @@ function dUsers(el){
     const u=db.users.find(x=>x.id===b.dataset.ureset);
     if(!await confirmDialog({title:'Reset password',message:`Issue a one-time temporary password for <b>${esc(u.username)}</b>? All their sessions will be revoked.`,confirmLabel:'Reset password'}))return;
     const tmp=await api.resetPassword(S.user,u.id);
-    openModal({title:'Temporary password \u2014 shown once',slim:true,body:`
+    const mm=openModal({title:'Temporary password \u2014 shown once',slim:true,body:`
       <p style="color:var(--muted);font-size:13px">Give this to <b>${esc(u.displayName)}</b> now. It is hashed in storage and will <b>not</b> be shown again, and it is never written to the audit log.</p>
-      <div class="pw-reveal" id="tmpPw">${esc(tmp)}</div><p class="hint">The user must change it at next sign-in.</p>`,
-      foot:`<button class="btn sm" id="cpTmp">${ic('copy')}Copy</button>`});
-    $('#cpTmp').addEventListener('click',()=>{navigator.clipboard?.writeText(tmp).then(()=>toast('Copied to clipboard.','success')).catch(()=>toast('Copy failed — select it manually.','error'));});
+      <div class="pw-reveal">${esc(tmp)}</div><p class="hint">The user must change it at next sign-in.</p>`,
+      foot:`<button class="btn sm" data-copypw="${esc(tmp)}">${ic('copy')}Copy</button>`});
+    mm.panel.querySelector('[data-copypw]').addEventListener('click',ev=>{navigator.clipboard?.writeText(ev.currentTarget.dataset.copypw).then(()=>toast('Copied to clipboard.','success')).catch(()=>toast('Copy failed — select it manually.','error'));});
   }));
   el.querySelectorAll('[data-usess]').forEach(b=>b.addEventListener('click',async()=>{
     const u=db.users.find(x=>x.id===b.dataset.usess);
@@ -1825,6 +1855,12 @@ function dUsers(el){
     const to=u.status==='active'?'disabled':'active';
     if(await confirmDialog({title:to==='disabled'?'Disable account':'Reactivate account',message:`${to==='disabled'?`<b>${esc(u.username)}</b> will be signed out everywhere and blocked from signing in.`:`<b>${esc(u.username)}</b> will be able to sign in again.`}`,confirmLabel:to==='disabled'?'Disable':'Reactivate',danger:to==='disabled'})){
       try{api.setStatus(S.user,u.id,to);toast(`Account ${to}.`,'success');refreshDash();}catch(e){toast(e.message,'error');}
+    }
+  }));
+  el.querySelectorAll('[data-udel]').forEach(b=>b.addEventListener('click',async()=>{
+    const u=db.users.find(x=>x.id===b.dataset.udel);
+    if(await confirmDialog({title:'Delete account',message:`Permanently delete <b>${esc(u.username)}</b>? Their sessions end immediately and the user ID is freed. This cannot be undone.`,confirmLabel:'Delete forever',danger:true})){
+      try{api.deleteUser(S.user,u.id);toast('Account deleted.','success');refreshDash();}catch(e){toast(e.message,'error');}
     }
   }));
 }
@@ -1889,7 +1925,7 @@ function dAppearance(el){
     <div class="pv-hero"><h2 id="apPvTitle">${esc(st.siteTitle)}<span class="dot" aria-hidden="true"></span></h2><div class="b" id="apPvBtn">${esc(st.nav.home)}</div></div>
     <div class="pv-foot" id="apPvFoot">\u2022 ${esc(st.footer.note)}</div></div></div>`;
   let logoId=st.logoMediaId,accent=st.accent,theme=st.defaultTheme;
-  el.querySelectorAll('#apSwatches .sw').forEach(b=>b.addEventListener('click',()=>{accent=b.dataset.v;$$('#apSwatches .sw').forEach(x=>x.classList.toggle('on',x===b));applyTheme(document.documentElement.dataset.theme);applyIdentity();}));
+  el.querySelectorAll('#apSwatches .sw').forEach(b=>b.addEventListener('click',()=>{accent=b.dataset.v;$$('#apSwatches .sw').forEach(x=>x.classList.toggle('on',x===b));db.settings.accent=accent;applyIdentity();}));
   el.querySelectorAll('#apTheme button').forEach(b=>b.addEventListener('click',()=>{theme=b.dataset.t;$$('#apTheme button').forEach(x=>x.classList.toggle('on',x===b));}));
   $('#apTitle').addEventListener('input',e=>{$('#apPvTitle').innerHTML=esc(e.target.value)+'<span class="dot" aria-hidden="true"></span>';});
   $('#apFNote').addEventListener('input',e=>{$('#apPvFoot').textContent='\u2022 '+e.target.value;});
@@ -1966,7 +2002,7 @@ function dMedia(el){
     navigator.clipboard?.writeText(m.dataUrl).then(()=>toast('Data URL copied.','success')).catch(()=>toast('Clipboard unavailable.','error'));}));
   el.querySelectorAll('[data-mdel]').forEach(b=>b.addEventListener('click',()=>{const m=db.media.find(x=>x.id===b.dataset.mdel);
     confirmDialog({title:'Delete media',message:`Remove <b>${esc(m.name)}</b> from the library?`,confirmLabel:'Delete',danger:true}).then(y=>{if(y){api.deleteMedia(S.user,b.dataset.mdel);toast('Media deleted.','success');refreshDash();}});}));
-  el.querySelectorAll('[data-mprev]').forEach(im=>im.addEventListener('click',()=>openModal({title:db.media.find(x=>x.id===im.dataset.mprev).name,wide:true,body:`<img src="${im.src}" style="width:100%;border:1px solid var(--line)" alt="">`})));
+  el.querySelectorAll('[data-mprev]').forEach(im=>im.addEventListener('click',()=>{const m=db.media.find(x=>x.id===im.dataset.mprev);if(m)openModal({title:m.name,wide:true,body:`<img src="${m.dataUrl}" style="width:100%;border:1px solid var(--line)" alt="">`});}));
 }
 /* ---------- activity logs ---------- */
 function dLogs(el){
@@ -1996,7 +2032,7 @@ function dSettings(el){
   const st=db.settings;
   el.innerHTML=`<div class="dh"><div><h1>Settings</h1><p>Platform configuration, data safety, and the extension workflow.</p></div></div>
   <div class="form-sec"><h3>General</h3><div class="fgrid">
-    <div class="field"><label>Session duration (hours, no "remember me")</label><input class="inp" id="seHours" type="number" min="1" max="8766" value="${st.sessionHours}"></div>
+    <div class="field"><label>Session duration in hours (only when "keep me signed in" is unchecked)</label><input class="inp" id="seHours" type="number" min="1" max="8766" value="${st.sessionHours}"></div>
     <div class="field"><label>Dashboard rows per page</label><input class="inp" id="sePer" type="number" min="4" max="48" value="${st.itemsPerPage}"></div>
     <div class="field full"><label class="cb" style="margin-top:8px"><input type="checkbox" id="seReg" ${st.allowRegistration?'checked':''}><i><svg viewBox="0 0 24 24">${I.check}</svg></i>Allow public registration (creates read-only USER accounts, rate-limited)</label></div>
   </div><button class="btn sm" id="seSave" style="margin-top:18px">${ic('check')}Save settings</button></div>
@@ -2005,8 +2041,9 @@ function dSettings(el){
     <button class="btn ghost sm" id="seImport">${ic('upload')}Import backup</button><input type="file" id="seFile" accept="application/json" hidden>
     <button class="btn danger sm" id="seReset">${ic('refresh')}Factory reset</button></div>
     <p class="hint" style="margin-top:12px">Exports contain password <b>hashes</b> \u2014 never plaintext \u2014 plus all content and settings. Keep the file private.</p></div>
-  <div class="form-sec"><h3>Ownership</h3><div class="dev-note">
-    <p>The account <code>@${OWNER_ID}</code> is the platform <b>owner</b>: role <code>SUPER_ADMIN</code> with unconditional access to every area \u2014 websites, projects, users, appearance, homepage, media, logs and settings. This cannot be revoked: the system restores owner rights automatically on every load and after any backup import, and the owner account is blocked from demotion or deactivation in the API itself.</p></div></div>
+  <div class="form-sec"><h3>Sessions & ownership</h3><div class="dev-note">
+    <p>With <b>Keep me signed in</b> checked at login (the default), sessions have <b>no expiry</b> \u2014 they remain valid until the user signs out, or the account is disabled or deleted. The hour field above applies only to sign-ins where that box was unchecked.</p>
+    <p style="margin-top:8px">The account <code>@${OWNER_ID}</code> is the platform <b>owner</b>: role <code>SUPER_ADMIN</code> with unconditional access to every area \u2014 websites, projects, users, appearance, homepage, media, logs and settings. This cannot be revoked: owner rights are restored automatically on every load and after any backup import, and the owner cannot be demoted, disabled, or deleted through the API.</p></div></div>
   <div class="form-sec"><h3>Developer notes \u00B7 extension workflow</h3><div class="dev-note">
     <p>Source & repository: <a href="${GH_URL}" target="_blank" rel="noopener noreferrer">${ic('github','sm')} github.com/UNFOTABLE01/unfotable</a></p>
     <p style="margin-top:8px">This build keeps its schema in <code>db.version</code>. To extend it: (1) add the field in <code>seedDB()</code> and the matching editor UI, (2) bump <code>version</code> and migrate existing records on <code>loadDB()</code>, (3) gate writes behind a capability in <code>CAPS</code>. Visual editors here intentionally cover <em>content and appearance</em> only \u2014 structural changes belong in code.</p>
@@ -2052,24 +2089,32 @@ window.addEventListener('hashchange',()=>{window.scrollTo(0,0);navigate();});
 setInterval(()=>{
   if(route().startsWith('dashboard')&&!sessionState()){toast('Session expired. Sign in again.');location.hash='#/login';}
 },60000);
+/* safety net: surface unexpected errors instead of failing silently */
+window.addEventListener('error',e=>{try{toast('Unexpected error: '+(e.message||'unknown'),'error');}catch(_){}});
+window.addEventListener('unhandledrejection',e=>{try{const r=e.reason;toast('Unexpected error: '+((r&&r.message)||'async failure'),'error');}catch(_){}});
 /* loader wordmark: site name + green full stop */
 (function(){const w=$('#ldWord');const t=db.settings.siteTitle;
  w.innerHTML=[...t].map(c=>`<i>${esc(c)}</i>`).join('')+'<i class="ld-dot"></i>';})();
-/* boot */
+/* boot — with fail-safe so a black screen is impossible */
 (function boot(){
-  applyTheme(LS.get('unfotable_theme')||db.settings.defaultTheme||'dark');
-  applyIdentity();
-  const s=sessionState();S.user=s?s.user:null;S.session=s?s.session:null;
-  renderNav();navigate();
-  if(RM||!window.gsap){const l=$('#loader');if(l)l.remove();document.body.classList.add('loaded');}
-  else{
-    if(window.ScrollTrigger)gsap.registerPlugin(ScrollTrigger);
-    const letters=$$('#ldWord i');
-    gsap.set(letters,{yPercent:120});
-    gsap.timeline({onComplete(){$('#loader')?.remove();document.body.classList.add('loaded');}})
-      .to(letters,{yPercent:0,duration:.8,stagger:.05,ease:'power4.out'},.15)
-      .fromTo('.ld-line',{scaleX:0},{scaleX:1,duration:.8,ease:'power3.inOut'},.3)
-      .to('#loader',{yPercent:-100,duration:.8,ease:'power4.inOut'},'+=.3');
+  try{
+    applyTheme(LS.get('unfotable_theme')||db.settings.defaultTheme||'dark');
+    applyIdentity();
+    const s=sessionState();S.user=s?s.user:null;S.session=s?s.session:null;
+    renderNav();navigate();
+    if(RM||!window.gsap){const l=$('#loader');if(l)l.remove();document.body.classList.add('loaded');}
+    else{
+      if(window.ScrollTrigger)gsap.registerPlugin(ScrollTrigger);
+      const letters=$$('#ldWord i');
+      gsap.set(letters,{yPercent:120});
+      gsap.timeline({onComplete(){$('#loader')?.remove();document.body.classList.add('loaded');}})
+        .to(letters,{yPercent:0,duration:.8,stagger:.05,ease:'power4.out'},.15)
+        .fromTo('.ld-line',{scaleX:0},{scaleX:1,duration:.8,ease:'power3.inOut'},.3)
+        .to('#loader',{yPercent:-100,duration:.8,ease:'power4.inOut'},'+=.3');
+    }
+  }catch(err){
+    const l=$('#loader');if(l)l.remove();document.body.classList.add('loaded');
+    $('#view').innerHTML='<div style="min-height:100svh;display:grid;place-items:center;text-align:center;padding:24px"><div><h1 style="font-family:\'Playfair Display\',serif;font-size:36px">UNFOTABLE<span class="dot"></span></h1><p style="color:var(--muted);margin-top:12px">Startup problem: '+esc(err.message)+'</p><button class="btn sm" style="margin-top:20px" onclick="try{localStorage.clear()}catch(e){};location.reload()">Reset & reload</button></div></div>';
   }
 })();
 </script>
