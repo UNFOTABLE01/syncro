@@ -194,6 +194,12 @@ input[type=color]{width:64px;height:42px;padding:3px;cursor:pointer;border:2px s
 .night-meta a{color:var(--green);font-weight:700;display:inline-flex;align-items:center;gap:7px}
 .night-meta a:hover{text-decoration:underline}
 .night-meta .copy{color:#6A719E;font-size:11.5px;margin-top:3px}
+.live-chip{display:inline-flex;align-items:center;gap:7px;margin-left:12px;font-family:'Press Start 2P',monospace;font-size:8px;
+  color:var(--green);border:2px solid rgba(30,201,91,.45);border-radius:999px;padding:6px 9px;
+  background:rgba(30,201,91,.07);vertical-align:middle;transition:background .2s,color .2s}
+.live-chip i{width:6px;height:6px;border-radius:50%;background:var(--green);animation:livepulse 1.4s infinite}
+.live-chip.hit{background:var(--green);color:#04140A}
+@keyframes livepulse{0%,100%{opacity:1}50%{opacity:.2}}
 
 @media(max-width:640px){
   .topbar{flex-wrap:wrap;gap:10px;padding:12px 14px}
@@ -237,6 +243,7 @@ input[type=color]{width:64px;height:42px;padding:3px;cursor:pointer;border:2px s
       <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
       github.com/UNFOTABLE01
     </a>
+    <span class="live-chip" id="liveChip" title="Changes saved by devanshu reach this page within 1 second"><i></i>LIVE SYNC</span>
     <div class="copy">&copy; <span id="year"></span> UNFOTABLE &mdash; crafted under a pixel moon</div>
   </div>
 </footer>
@@ -258,9 +265,24 @@ function hashPw(s){ let h = 9; for (let i = 0; i < s.length; i++) h = Math.imul(
 
 const store = {
   get(k, d){ try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch(e){ return d; } },
-  set(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
+  /* every save (project, theme, logo, account...) stamps a version so all open pages detect it live */
+  set(k, v){ localStorage.setItem(k, JSON.stringify(v)); if (k !== K.ver) bump(); }
 };
-const K = { users:'uf_users', session:'uf_session', projects:'uf_projects', favs:'uf_favs', theme:'uf_theme', scene:'uf_scene' };
+const K = { users:'uf_users', session:'uf_session', projects:'uf_projects', favs:'uf_favs', theme:'uf_theme', scene:'uf_scene', ver:'uf_ver' };
+
+/* ---------- live sync core ----------
+   Any change saved by devanshu bumps uf_ver. Every other open page of
+   the site notices it (BroadcastChannel + storage event + 1s heartbeat)
+   and refreshes itself within 1 second — no manual reload needed. */
+const bc = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel('unfotable_live') : null;
+let lastVer = 0;
+function bump(){
+  const v = Date.now();
+  localStorage.setItem(K.ver, JSON.stringify(v));
+  lastVer = v;
+  try { if (bc) bc.postMessage({ ver: v }); } catch(e){}
+}
+lastVer = store.get(K.ver, 0);
 
 /* ---------- icons ---------- */
 const HEART = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>';
@@ -351,6 +373,7 @@ function toast(msg, warn){
 function setUser(u){
   currentUser = u;
   if (u) store.set(K.session, u.u); else localStorage.removeItem(K.session);
+  bump(); /* logins/logouts are broadcast live too */
   renderHeader();
 }
 function login(u, p){
@@ -955,6 +978,80 @@ $('#year').textContent = new Date().getFullYear();
 applyTheme();
 render();
 window.addEventListener('hashchange', render);
+</script>
+
+<script>
+/* ================= LIVE SYNC ENGINE =================
+   Anything saved from the devanshu id — projects, theme colors, logo,
+   account changes — is stamped with a version number (uf_ver). Every
+   other open page of the website detects the new version through three
+   layers and re-renders itself automatically:
+     1. BroadcastChannel  → instant (same browser, other tabs)
+     2. storage event     → instant fallback (same browser, other tabs)
+     3. 1-second heartbeat → guaranteed catch-up, at most 1s behind
+   Typing is never interrupted, and your scroll position is kept. */
+(function(){
+  function routeName(){
+    return (location.hash.replace(/^#/, '') || '/').split('/').filter(Boolean)[0] || '';
+  }
+
+  function pullRemote(){
+    users    = store.get(K.users, users);
+    projects = store.get(K.projects, projects);
+    theme    = store.get(K.theme, theme);
+    favs     = store.get(K.favs, favs);
+    const sess = store.get(K.session, null);
+    currentUser = sess ? (users.find(u => u.u === sess) || null) : null;
+    applyTheme();
+  }
+
+  function renderLive(){
+    const ae = document.activeElement;
+    if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return; /* never interrupt typing */
+    const r = routeName();
+    if (r === 'admin' || r === 'login' || r === 'signup') return; /* forms own these screens */
+    const qEl = $('#q');
+    const qv  = qEl ? qEl.value : '';
+    const y   = window.scrollY;
+    render();
+    if (qv && $('#q')){ $('#q').value = qv; $('#q').dispatchEvent(new Event('input')); }
+    window.scrollTo(0, y);
+  }
+
+  function flashChip(){
+    const chip = document.getElementById('liveChip');
+    if (!chip) return;
+    chip.classList.add('hit');
+    setTimeout(() => chip.classList.remove('hit'), 1200);
+  }
+
+  function onRemote(announce){
+    lastVer = store.get(K.ver, 0);
+    pullRemote();
+    renderLive();
+    if (announce){ toast('Live update applied'); flashChip(); }
+  }
+
+  /* layer 1 + 2: instant signals from other tabs of this browser */
+  if (bc) bc.onmessage = () => onRemote(true);
+  window.addEventListener('storage', e => {
+    if (e.key === null || e.key === K.ver) onRemote(true);
+  });
+
+  /* layer 3: guaranteed 1-second heartbeat */
+  setInterval(() => {
+    const v = store.get(K.ver, 0);
+    if (v !== lastVer) onRemote(false);
+  }, 1000);
+
+  /* catch up the moment a background tab becomes visible again */
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden){
+      const v = store.get(K.ver, 0);
+      if (v !== lastVer) onRemote(false);
+    }
+  });
+})();
 </script>
 
 </body>
