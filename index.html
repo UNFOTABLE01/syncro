@@ -205,6 +205,8 @@ select.inp{appearance:none; -webkit-appearance:none; cursor:pointer;
 .p-info{flex:1; min-width:0}
 .p-name{font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .p-mail{font-size:11px; color:var(--text3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.p-create{display:none; flex:none; padding:4px 9px; font-size:11.5px; border-radius:var(--r-sm)}
+.profile.untitled .p-create{display:inline-flex}
 /* ---------- note editor ---------- */
 .note-page{max-width:860px; margin:0 auto; padding:26px 40px 140px; line-height:1.75; min-height:60vh;
   font-size:16px; outline:none; word-wrap:break-word}
@@ -567,6 +569,7 @@ table.vgrid td.fxc{color:var(--accent-deep); font-weight:600}
         <div class="p-name" id="pName"></div>
         <div class="p-mail" id="pMail"></div>
       </div>
+      <button class="btn btn-sm p-create" id="pCreate" title="Create a free account">Create account</button>
       <button class="iconbtn" id="gearBtn" title="Settings"></button>
     </div>
   </aside>
@@ -685,7 +688,13 @@ async function register(name, email, pass) {
   if (db.users[email]) throw 'An ID with this email already exists — try signing in.';
   const salt = uid();
   db.users[email] = { name, email, salt, hash: await sha256(salt + pass), color: pickColor(email), createdAt: now() };
-  db.data[email] = seedData(name);
+  const g = db.data.guest;
+  if (g && (g.workspaces || []).length && Object.keys(g.nodes || {}).length) {
+    db.data[email] = g;   // the untitled workspace carries over — the new account saves it
+    db.data.guest = null;
+  } else {
+    db.data[email] = seedData(name);
+  }
   saveNow();
   return db.users[email];
 }
@@ -698,7 +707,7 @@ async function login(email, pass) {
 }
 function startSession(u) {
   session = { guest: false, email: u.email, name: u.name };
-  db.session = u.email;
+  db.session = u.email; db.lastLogin = u.email;
   db.theme = db.theme || 'dark'; saveNow();
   enterApp();
 }
@@ -861,7 +870,7 @@ function renderGateForm() {
   const reg = gateMode === 'register';
   $('#gateForm').innerHTML =
     (reg ? '<div class="form-field"><label>Your name</label><input class="inp" id="gName" placeholder="Ada Lovelace" maxlength="60"></div>' : '') +
-    '<div class="form-field"><label>Email</label><input class="inp" id="gEmail" type="email" placeholder="you@example.com" autocomplete="username"></div>' +
+    '<div class="form-field"><label>Email</label><input class="inp" id="gEmail" type="email" placeholder="you@example.com" autocomplete="username" value="' + esc(db.lastLogin || '') + '"></div>' +
     '<div class="form-field"><label>Password</label><input class="inp" id="gPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>' +
     '<button class="btn btn-primary btn-block" id="gSubmit" type="submit">' + (reg ? 'Create my ID' : 'Sign in') + '</button>';
 }
@@ -887,7 +896,7 @@ function authModal(after) {
   authAfter = after || null;
   let mode = 'register';
   openModal(mHead('Create your free SYNCRO ID', I.user(20)) +
-    '<div class="m-body"><div style="font-size:13px;color:var(--text3);margin-top:-4px">A local ID unlocks sharing by link. It never leaves this device.</div>' +
+    '<div class="m-body"><div style="font-size:13px;color:var(--text3);margin-top:-4px">Your ID saves your workspace — sign out and back in anytime — and unlocks sharing by link.</div>' +
     '<div class="seg"><button type="button" id="amReg" class="on">Create an ID</button><button type="button" id="amLog">Sign in</button></div>' +
     '<div class="form-err" id="amErr"></div>' +
     '<form class="gate-form" id="amForm" autocomplete="off" style="gap:10px"></form></div>', { wide: true });
@@ -896,7 +905,7 @@ function authModal(after) {
     $('#amReg').classList.toggle('on', reg); $('#amLog').classList.toggle('on', !reg);
     $('#amForm').innerHTML =
       (reg ? '<div class="form-field"><label>Your name</label><input class="inp" id="aName" maxlength="60" placeholder="Ada Lovelace"></div>' : '') +
-      '<div class="form-field"><label>Email</label><input class="inp" id="aEmail" type="email" placeholder="you@example.com"></div>' +
+      '<div class="form-field"><label>Email</label><input class="inp" id="aEmail" type="email" placeholder="you@example.com"' + (!reg && db.lastLogin ? ' value="' + esc(db.lastLogin) + '"' : '') + '></div>' +
       '<div class="form-field"><label>Password</label><input class="inp" id="aPass" type="password" placeholder="••••••••"></div>' +
       '<button class="btn btn-primary btn-block" type="submit">' + (reg ? 'Create my ID' : 'Sign in') + '</button>';
   };
@@ -931,14 +940,18 @@ function settingsModal() {
       '<button type="button" id="thDark" class="' + (db.theme === 'dark' ? 'on' : '') + '">' + I.moon(14) + 'Dark</button></div></div>' +
     '<div class="label" style="margin-top:10px">Account</div>' +
     '<div class="set-row"><div class="avatar" style="background:' + av + ';width:38px;height:38px">' + esc(initials()) + '</div>' +
-      '<div class="s-info"><div class="s-t">' + esc(session.name) + '</div><div class="s-d">' + (session.guest ? 'Untitled — data stays on this device only' : esc(session.email)) + '</div></div>' +
-      '<button class="btn btn-sm" id="sLogout">' + I.logout(14) + 'Log out</button></div>' +
+      '<div class="s-info"><div class="s-t">' + esc(session.name) + '</div><div class="s-d">' + (session.guest ? 'Untitled — temporary, saved only on this device' : esc(session.email) + ' · saves automatically') + '</div></div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px">' +
+      (session.guest ? '<button class="btn btn-sm btn-primary" id="sCreate">' + I.user(14) + 'Create account</button>' : '') +
+      '<button class="btn btn-sm" id="sLogout">' + I.logout(14) + 'Log out</button></div></div>' +
     '<div class="label" style="margin-top:10px;color:var(--danger)">Danger zone</div>' +
     '<div class="set-row"><div class="s-info"><div class="s-t">Delete account</div><div class="s-d">Removes your ID and every document here</div></div>' +
       '<button class="btn btn-sm btn-danger" id="sDelete">' + I.trash(14) + 'Delete</button></div>' +
     '<div class="rp-hint" style="margin-top:10px">SYNCRO keeps everything on this device (local-first). Version 1.0</div></div>', { wide: true });
   $('#thLight').addEventListener('click', () => { applyTheme('light'); saveSoon(); settingsModal(); });
   $('#thDark').addEventListener('click', () => { applyTheme('dark'); saveSoon(); settingsModal(); });
+  const sCreate = $('#sCreate');
+  if (sCreate) sCreate.addEventListener('click', () => { closeModal(); authModal(); });
   $('#sLogout').addEventListener('click', () => { closeModal(); logout(); });
   $('#sDelete').addEventListener('click', () => {
     closeModal();
@@ -2053,7 +2066,10 @@ function wireChrome() {
   });
   $('#backdrop').addEventListener('click', () => document.body.classList.remove('sb-open', 'rp-open'));
   $('#gearBtn').addEventListener('click', settingsModal);
-  $('#profileRow').addEventListener('click', e => { if (!e.target.closest('#gearBtn')) settingsModal(); });
+  $('#profileRow').addEventListener('click', e => {
+    if (e.target.closest('#pCreate')) { authModal(); return; }
+    if (!e.target.closest('#gearBtn')) settingsModal();
+  });
   $('#gateTabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) gateTab(b.dataset.tab); });
   $('#gateForm').addEventListener('submit', gateSubmit);
   $('#guestBtn').addEventListener('click', () => { guestSession(); toast('Untitled mode — everything works, sharing asks for an ID.'); });
@@ -2110,6 +2126,7 @@ function enterApp() {
   $('#pAvatar').style.background = 'linear-gradient(135deg,' + col[0] + ',' + col[1] + ')';
   $('#pName').textContent = session.name;
   $('#pMail').textContent = session.guest ? 'Untitled · local only' : session.email;
+  $('#profileRow').classList.toggle('untitled', !!session.guest);
   applyTheme(db.theme);
   updateShareUI();
   renderSidebar();
