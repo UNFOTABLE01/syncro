@@ -363,6 +363,12 @@ table.grid td.cell input.cellin{width:100%; height:100%; border:none; outline:no
 .gate-alt{text-align:center; font-size:13px; color:var(--text3)}
 .gate-alt button{border:none; background:none; color:var(--accent-deep); font-weight:600; cursor:pointer; font-size:13px}
 .gate-alt button:hover{text-decoration:underline}
+.gate-hint{font-size:12px; color:var(--text3); text-align:center; line-height:1.45}
+.g-link{display:block; margin:2px auto 0; border:none; background:none; color:var(--text3); font-size:12.5px; cursor:pointer; padding:2px 0; font-family:var(--font-ui)}
+.g-link:hover{color:var(--accent-deep); text-decoration:underline}
+.g-keywrap{display:none; flex-direction:column; gap:8px; padding:11px; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel2)}
+.g-keywrap.show{display:flex}
+.g-keywrap textarea{resize:vertical; min-height:58px; font-size:12px; line-height:1.5; word-break:break-all}
 .gate-feats{display:flex; gap:9px}
 .gate-feats .chip{display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:var(--text2);
   background:var(--panel); border:1px solid var(--border); border-radius:4px; padding:6px 13px}
@@ -446,7 +452,7 @@ table.vgrid td.fxc{color:var(--accent-deep); font-weight:600}
     <div class="gate-card">
       <div class="tabs" id="gateTabs">
         <button data-tab="login" class="on">Sign in</button>
-        <button data-tab="register">Create an ID</button>
+        <button data-tab="register">Create account</button>
       </div>
       <div class="form-err" id="gateErr"></div>
       <form class="gate-form" id="gateForm" autocomplete="off"></form>
@@ -649,13 +655,28 @@ function loadDb() {
   if (!db.users) db.users = {}; if (!db.data) db.data = {};
 }
 let saveTimer = null;
-function saveNow() { try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch (e) { toast('Could not save — storage is full', 'err'); } setSaveState('saved'); }
+function saveNow() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(db)); } catch (e) { toast('Could not save — storage is full', 'err'); }
+  if (session && !session.guest && db.data[session.email]) cloudPush();
+  setSaveState('saved');
+}
+let cloudTimer = null;
+function cloudPush() {
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(async () => {
+    if (!session || session.guest || !db.data[session.email]) return;
+    setSaveState('syncing');
+    try { await Cloud.push(session.email, db.data[session.email]); } catch (e) {}
+    if (session && !session.guest) setSaveState('saved');
+  }, 450);
+}
 const saveSoon = debounce(saveNow, 500);
 function markDirty() { setSaveState('busy'); saveSoon(); }
 function setSaveState(s) {
   const el = $('#saveState'); if (!el) return;
-  el.classList.toggle('busy', s === 'busy');
-  el.lastElementChild.textContent = s === 'busy' ? 'Saving…' : 'Saved';
+  const signed = session && !session.guest;
+  el.classList.toggle('busy', s !== 'saved');
+  el.lastElementChild.textContent = s === 'busy' ? 'Saving…' : s === 'syncing' ? 'Syncing…' : (signed ? 'Synced' : 'Saved');
 }
 
 /* ---------- theme ---------- */
@@ -674,6 +695,68 @@ async function sha256(str) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/* ---------- SYNCRO Cloud — the little server inside this file ----------
+   A simulated cloud backend that lives in its own storage namespace
+   (syncro.cloud.v1), separate from the on-device workspace db — exactly
+   like a remote database. Every tab that opens SYNCRO talks to the same
+   "server", so an account created in one tab can be signed into from
+   another. For genuinely different devices or browsers, an account
+   travels via its portable Sync Key (SYN-1-…): the key carries the
+   profile + workspace snapshot and re-registers the account on arrival. */
+const CLOUD_KEY = 'syncro.cloud.v1';
+const NOACC_MSG = 'No account found for this email in SYNCRO Cloud. Created it on another device? Paste its sync key below — or create the account here.';
+const Cloud = (() => {
+  let cdb = null;
+  function load() {
+    try { cdb = JSON.parse(localStorage.getItem(CLOUD_KEY)) || null; } catch (e) { cdb = null; }
+    if (!cdb || typeof cdb !== 'object' || !cdb.accounts) cdb = { accounts: {} };
+    return cdb;
+  }
+  function persist() { try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cdb)); } catch (e) {} }
+  const wait = () => new Promise(r => setTimeout(r, 220 + Math.random() * 300));
+  const acc = email => cdb.accounts[email] || null;
+  return {
+    peek: email => { load(); return !!acc(email); },
+    ensure(email, profile, data) { load(); if (!acc(email)) { cdb.accounts[email] = { profile, data, updatedAt: now() }; persist(); } },
+    async signup(name, email, salt, hash, color, data) {
+      await wait(); load();
+      if (acc(email)) throw 'An account with this email already exists — try signing in.';
+      cdb.accounts[email] = { profile: { name, email, salt, hash, color, createdAt: now() }, data, updatedAt: now() };
+      persist(); return cdb.accounts[email];
+    },
+    async login(email, pass) {
+      await wait(); load();
+      const a = acc(email);
+      if (!a) throw NOACC_MSG;
+      if (await sha256(a.profile.salt + pass) !== a.profile.hash) throw 'Wrong password — please try again.';
+      return a;
+    },
+    async pull(email) { await wait(); load(); const a = acc(email); return a ? a.data : null; },
+    async push(email, data) { load(); const a = acc(email); if (!a) return; a.data = data; a.updatedAt = now(); persist(); },
+    async remove(email) { await wait(); load(); delete cdb.accounts[email]; persist(); },
+    async adopt(key) {
+      await wait(); load();
+      const email = key.e;
+      const cur = acc(email);
+      if (cur && cur.profile.hash === key.h) { cur.data = key.d; cur.updatedAt = now(); persist(); return cur; }
+      cdb.accounts[email] = { profile: { name: key.n, email, salt: key.s, hash: key.h, color: key.c, createdAt: key.t || now() }, data: key.d, updatedAt: now() };
+      persist(); return cdb.accounts[email];
+    },
+  };
+})();
+function syncKeyOf(u, data) {
+  const payload = { v: 1, e: u.email, n: u.name, s: u.salt, h: u.hash, c: u.color, t: u.createdAt, d: data };
+  return 'SYN-1-' + b64e(JSON.stringify(payload));
+}
+function parseSyncKey(str) {
+  const m = String(str || '').trim().match(/SYN-1-([A-Za-z0-9_\-]+)/);
+  if (!m) throw 'That does not look like a SYNCRO sync key — it should start with SYN-1-.';
+  let p;
+  try { p = JSON.parse(b64d(m[1])); } catch (e) { throw 'That sync key is damaged — copy it again on the other device.'; }
+  if (!p || p.v !== 1 || !p.e || !p.n || !p.h || !p.d || !Array.isArray(p.d.workspaces)) throw 'That sync key is damaged — copy it again on the other device.';
+  return p;
+}
+
 /* ---------- accounts ---------- */
 const AV_COLORS = [['#e4e4e7', '#a1a1aa'], ['#d4d4d8', '#8e8e94'], ['#c2c2c7', '#74747b'], ['#a9a9b0', '#5c5c63'], ['#8b8b92', '#46464c'], ['#6e6e75', '#333338']];
 function pickColor(key) { let h = 0; for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return AV_COLORS[h % AV_COLORS.length]; }
@@ -685,25 +768,24 @@ async function register(name, email, pass) {
   if (!name) throw 'Please enter a name.';
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw 'Please enter a valid email address.';
   if (pass.length < 4) throw 'Password needs at least 4 characters.';
-  if (db.users[email]) throw 'An ID with this email already exists — try signing in.';
-  const salt = uid();
-  db.users[email] = { name, email, salt, hash: await sha256(salt + pass), color: pickColor(email), createdAt: now() };
   const g = db.data.guest;
-  if (g && (g.workspaces || []).length && Object.keys(g.nodes || {}).length) {
-    db.data[email] = g;   // the untitled workspace carries over — the new account saves it
-    db.data.guest = null;
-  } else {
-    db.data[email] = seedData(name);
-  }
+  const data = (g && (g.workspaces || []).length && Object.keys(g.nodes || {}).length) ? g : seedData(name);
+  const salt = uid();
+  const hash = await sha256(salt + pass);
+  await Cloud.signup(name, email, salt, hash, pickColor(email), data);   // the server decides whether the email is free
+  db.users[email] = { name, email, salt, hash, color: pickColor(email), createdAt: now() };   // local mirror of the cloud profile
+  db.data[email] = data;
+  if (data === g) db.data.guest = null;   // the untitled workspace carries over — the new account saves it
   saveNow();
   return db.users[email];
 }
 async function login(email, pass) {
   email = email.trim().toLowerCase();
-  const u = db.users[email];
-  if (!u) throw 'No ID found for this email.';
-  if (await sha256(u.salt + pass) !== u.hash) throw 'Wrong password — please try again.';
-  return u;
+  const a = await Cloud.login(email, pass);            // authenticated by SYNCRO Cloud
+  db.users[email] = { name: a.profile.name, email: a.profile.email, salt: a.profile.salt, hash: a.profile.hash, color: a.profile.color, createdAt: a.profile.createdAt };
+  db.data[email] = JSON.parse(JSON.stringify(a.data)); // pull the cloud workspace down to this device
+  saveNow();
+  return db.users[email];
 }
 function startSession(u) {
   session = { guest: false, email: u.email, name: u.name };
@@ -719,14 +801,14 @@ function guestSession() {
   enterApp();
 }
 function logout() {
-  session = null; db.session = null; saveNow();
+  clearTimeout(cloudTimer); session = null; db.session = null; saveNow();
   $('#app').classList.add('hidden');
   showGate('login');
   toast('Signed out. See you soon!');
 }
 async function deleteAccount() {
   if (session.guest) { db.data.guest = { workspaces: [], nodes: {}, lastWs: null, lastDoc: null, expanded: {} }; }
-  else { delete db.users[session.email]; delete db.data[session.email]; }
+  else { const gone = session.email; delete db.users[gone]; delete db.data[gone]; clearTimeout(cloudTimer); await Cloud.remove(gone); }
   session = null; db.session = null; saveNow();
   location.hash = '';
   $('#app').classList.add('hidden');
@@ -745,9 +827,9 @@ function seedData(name) {
 }
 function welcomeHTML(name) {
   return '<h1>Hi ' + esc(name.split(' ')[0]) + ', welcome to SYNCRO</h1>' +
-  '<p>This is your personal workspace. Everything you create here is <b>saved automatically</b> on this device — notes, sheets and boards live side by side, always in sync with your flow.</p>' +
+  '<p>This is your personal workspace. Everything you create here is <b>saved automatically</b> to your account — notes, sheets and boards live side by side, always in sync with your flow.</p>' +
   '<h2>Try it right now</h2>' +
-  '<ul class="ck"><li class="done"><span class="box"></span><span>Create your free ID</span></li>' +
+  '<ul class="ck"><li class="done"><span class="box"></span><span>Create your free account</span></li>' +
   '<li><span class="box"></span><span>Click anywhere in this paragraph and start typing</span></li>' +
   '<li><span class="box"></span><span>Select some text to see the quick format bar</span></li>' +
   '<li><span class="box"></span><span>Open <b>Budget planner</b> to see formulas in action</span></li>' +
@@ -872,7 +954,33 @@ function renderGateForm() {
     (reg ? '<div class="form-field"><label>Your name</label><input class="inp" id="gName" placeholder="Ada Lovelace" maxlength="60"></div>' : '') +
     '<div class="form-field"><label>Email</label><input class="inp" id="gEmail" type="email" placeholder="you@example.com" autocomplete="username" value="' + esc(db.lastLogin || '') + '"></div>' +
     '<div class="form-field"><label>Password</label><input class="inp" id="gPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>' +
-    '<button class="btn btn-primary btn-block" id="gSubmit" type="submit">' + (reg ? 'Create my ID' : 'Sign in') + '</button>';
+    '<button class="btn btn-primary btn-block" id="gSubmit" type="submit">' + (reg ? 'Create account' : 'Sign in') + '</button>' +
+    (reg
+      ? '<div class="gate-hint">Saved in SYNCRO Cloud — sign in with this email and password from any device.</div>'
+      : '<button type="button" class="g-link" id="gKeyTgl">Have a sync key? Import an account from another device</button>' +
+        '<div class="g-keywrap" id="gKeyWrap"><textarea class="inp" id="gKey" rows="3" placeholder="SYN-1-… paste the key copied on your other device" spellcheck="false"></textarea>' +
+        '<button type="button" class="btn btn-block" id="gImport">Import account from sync key</button></div>');
+  const tgl = $('#gKeyTgl');
+  if (tgl) tgl.addEventListener('click', () => $('#gKeyWrap').classList.toggle('show'));
+  const imp = $('#gImport');
+  if (imp) imp.addEventListener('click', async () => {
+    const errEl = $('#gateErr'); errEl.classList.remove('show');
+    imp.disabled = true;
+    try {
+      const p = parseSyncKey($('#gKey').value);
+      const a = await Cloud.adopt(p);   // the account registers with SYNCRO Cloud on this device too
+      const em = a.profile.email;
+      db.users[em] = { name: a.profile.name, email: a.profile.email, salt: a.profile.salt, hash: a.profile.hash, color: a.profile.color, createdAt: a.profile.createdAt };
+      db.data[em] = JSON.parse(JSON.stringify(a.data));
+      saveNow();
+      toast('Account imported — it now signs in on this device as well.', 'ok');
+      startSession(db.users[em]);
+    } catch (err) {
+      errEl.textContent = err; errEl.classList.add('show');
+      $('#gKeyWrap').classList.add('show');
+      imp.disabled = false;
+    }
+  });
 }
 async function gateSubmit(e) {
   e.preventDefault();
@@ -885,6 +993,7 @@ async function gateSubmit(e) {
     startSession(u);
   } catch (err) {
     errEl.textContent = err; errEl.classList.add('show');
+    if (err === NOACC_MSG) { const w = $('#gKeyWrap'); if (w) { w.classList.add('show'); const k = $('#gKey'); if (k) k.focus(); } }
     btn.disabled = false;
   }
 }
@@ -895,9 +1004,9 @@ let authAfter = null;
 function authModal(after) {
   authAfter = after || null;
   let mode = 'register';
-  openModal(mHead('Create your free SYNCRO ID', I.user(20)) +
-    '<div class="m-body"><div style="font-size:13px;color:var(--text3);margin-top:-4px">Your ID saves your workspace — sign out and back in anytime — and unlocks sharing by link.</div>' +
-    '<div class="seg"><button type="button" id="amReg" class="on">Create an ID</button><button type="button" id="amLog">Sign in</button></div>' +
+  openModal(mHead('Create your free account', I.user(20)) +
+    '<div class="m-body"><div style="font-size:13px;color:var(--text3);margin-top:-4px">Your account lives in SYNCRO Cloud — sign out and back in on any device — and unlocks sharing by link.</div>' +
+    '<div class="seg"><button type="button" id="amReg" class="on">Create account</button><button type="button" id="amLog">Sign in</button></div>' +
     '<div class="form-err" id="amErr"></div>' +
     '<form class="gate-form" id="amForm" autocomplete="off" style="gap:10px"></form></div>', { wide: true });
   const render = () => {
@@ -907,7 +1016,7 @@ function authModal(after) {
       (reg ? '<div class="form-field"><label>Your name</label><input class="inp" id="aName" maxlength="60" placeholder="Ada Lovelace"></div>' : '') +
       '<div class="form-field"><label>Email</label><input class="inp" id="aEmail" type="email" placeholder="you@example.com"' + (!reg && db.lastLogin ? ' value="' + esc(db.lastLogin) + '"' : '') + '></div>' +
       '<div class="form-field"><label>Password</label><input class="inp" id="aPass" type="password" placeholder="••••••••"></div>' +
-      '<button class="btn btn-primary btn-block" type="submit">' + (reg ? 'Create my ID' : 'Sign in') + '</button>';
+      '<button class="btn btn-primary btn-block" type="submit">' + (reg ? 'Create account' : 'Sign in') + '</button>';
   };
   render();
   $('#amReg').addEventListener('click', () => { mode = 'register'; render(); });
@@ -921,7 +1030,7 @@ function authModal(after) {
       else u = await login($('#aEmail').value, $('#aPass').value);
       startSession(u);
       closeModal();
-      toast(mode === 'register' ? 'Your ID is ready — welcome!' : 'Signed in.', 'ok');
+      toast(mode === 'register' ? 'Account created — saved to SYNCRO Cloud!' : 'Signed in.', 'ok');
       if (authAfter) { const f = authAfter; authAfter = null; f(); }
     } catch (e2) { err.textContent = e2; err.classList.add('show'); }
   });
@@ -940,24 +1049,38 @@ function settingsModal() {
       '<button type="button" id="thDark" class="' + (db.theme === 'dark' ? 'on' : '') + '">' + I.moon(14) + 'Dark</button></div></div>' +
     '<div class="label" style="margin-top:10px">Account</div>' +
     '<div class="set-row"><div class="avatar" style="background:' + av + ';width:38px;height:38px">' + esc(initials()) + '</div>' +
-      '<div class="s-info"><div class="s-t">' + esc(session.name) + '</div><div class="s-d">' + (session.guest ? 'Untitled — temporary, saved only on this device' : esc(session.email) + ' · saves automatically') + '</div></div>' +
+      '<div class="s-info"><div class="s-t">' + esc(session.name) + '</div><div class="s-d">' + (session.guest ? 'Untitled — temporary, saved only on this device' : esc(session.email) + ' · synced to SYNCRO Cloud') + '</div></div>' +
       '<div style="display:flex;flex-direction:column;gap:6px">' +
       (session.guest ? '<button class="btn btn-sm btn-primary" id="sCreate">' + I.user(14) + 'Create account</button>' : '') +
       '<button class="btn btn-sm" id="sLogout">' + I.logout(14) + 'Log out</button></div></div>' +
+    (!session.guest
+      ? '<div class="label" style="margin-top:10px">SYNCRO Cloud</div>' +
+        '<div class="set-row"><div class="s-info"><div class="s-t">Cross-device sign-in</div><div class="s-d">Open SYNCRO anywhere and sign in with this email and password. Two tabs of this browser already act as two devices; the sync key below moves the account anywhere else.</div></div></div>' +
+        '<div class="set-row"><div class="s-info"><div class="s-t">Sync key</div><div class="s-d">A portable code carrying this account and its documents — paste it into SYNCRO on any device to sign in there.</div></div>' +
+        '<button class="btn btn-sm" id="sSyncKey">' + I.copy(14) + 'Copy key</button></div>'
+      : '') +
     '<div class="label" style="margin-top:10px;color:var(--danger)">Danger zone</div>' +
-    '<div class="set-row"><div class="s-info"><div class="s-t">Delete account</div><div class="s-d">Removes your ID and every document here</div></div>' +
+    '<div class="set-row"><div class="s-info"><div class="s-t">Delete account</div><div class="s-d">Removes your account from SYNCRO Cloud and this device, with every document</div></div>' +
       '<button class="btn btn-sm btn-danger" id="sDelete">' + I.trash(14) + 'Delete</button></div>' +
-    '<div class="rp-hint" style="margin-top:10px">SYNCRO keeps everything on this device (local-first). Version 1.0</div></div>', { wide: true });
+    '<div class="rp-hint" style="margin-top:10px">Accounts sync through SYNCRO Cloud — the little server inside this file. A local copy stays on this device for offline use. Version 1.1</div></div>', { wide: true });
   $('#thLight').addEventListener('click', () => { applyTheme('light'); saveSoon(); settingsModal(); });
   $('#thDark').addEventListener('click', () => { applyTheme('dark'); saveSoon(); settingsModal(); });
   const sCreate = $('#sCreate');
   if (sCreate) sCreate.addEventListener('click', () => { closeModal(); authModal(); });
+  const sSyncKey = $('#sSyncKey');
+  if (sSyncKey) sSyncKey.addEventListener('click', () => {
+    const u = db.users[session.email];
+    if (!u) return;
+    copyText(syncKeyOf(u, db.data[session.email] || myData()))
+      .then(() => toast('Sync key copied — paste it into SYNCRO on another device.', 'ok'))
+      .catch(() => toast('Could not reach the clipboard on this browser.', 'err'));
+  });
   $('#sLogout').addEventListener('click', () => { closeModal(); logout(); });
   $('#sDelete').addEventListener('click', () => {
     closeModal();
     confirmModal({
       title: 'Delete this account?',
-      body: 'This permanently removes <b>' + esc(session.name) + '</b>' + (session.guest ? ' (untitled data)' : ' (' + esc(session.email) + '') + ') and all workspaces, notes, sheets and boards stored for it. This cannot be undone.',
+      body: 'This permanently removes <b>' + esc(session.name) + '</b>' + (session.guest ? ' (untitled data)' : ' (' + esc(session.email) + '') + ') and all workspaces, notes, sheets and boards stored for it — from SYNCRO Cloud and this device. This cannot be undone.',
       okLabel: 'Delete everything', danger: true,
       onOk: deleteAccount
     });
@@ -2125,7 +2248,7 @@ function enterApp() {
   $('#pAvatar').textContent = initials();
   $('#pAvatar').style.background = 'linear-gradient(135deg,' + col[0] + ',' + col[1] + ')';
   $('#pName').textContent = session.name;
-  $('#pMail').textContent = session.guest ? 'Untitled · local only' : session.email;
+  $('#pMail').textContent = session.guest ? 'Untitled · local only' : session.email + ' · cloud';
   $('#profileRow').classList.toggle('untitled', !!session.guest);
   applyTheme(db.theme);
   updateShareUI();
@@ -2145,6 +2268,12 @@ function tryOpenViewer() {
 }
 function init() {
   loadDb();
+  /* accounts saved by older versions (device-only) are adopted by SYNCRO Cloud,
+     so pre-existing sign-ins keep working here and everywhere else */
+  if (db.users) for (const em of Object.keys(db.users)) {
+    const u = db.users[em];
+    Cloud.ensure(em, { name: u.name, email: u.email, salt: u.salt, hash: u.hash, color: u.color, createdAt: u.createdAt }, db.data[em] || seedData(u.name));
+  }
   buildFloatTb();
   fillFontUI();
   wireFontUI();
