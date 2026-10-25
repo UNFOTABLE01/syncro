@@ -369,6 +369,16 @@ table.grid td.cell input.cellin{width:100%; height:100%; border:none; outline:no
 .g-keywrap{display:none; flex-direction:column; gap:8px; padding:11px; border:1px solid var(--border); border-radius:var(--r-lg); background:var(--panel2)}
 .g-keywrap.show{display:flex}
 .g-keywrap textarea{resize:vertical; min-height:58px; font-size:12px; line-height:1.5; word-break:break-all}
+.emoji-sug{position:fixed; z-index:80; background:var(--panel); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-sm); padding:9px 11px; display:flex; flex-direction:column; gap:8px; max-width:344px}
+.emoji-sug .es-title{font-size:12px; font-weight:600; color:var(--text)}
+.emoji-sug .es-title span{color:var(--text3); font-weight:500}
+.emoji-sug .es-row{display:flex; flex-wrap:wrap; gap:4px}
+.emoji-sug .e{font-size:17px; line-height:1; width:35px; height:35px; display:grid; place-items:center; background:var(--panel2); border:1px solid var(--border); border-radius:var(--r-sm); cursor:pointer; padding:0}
+.emoji-sug .e:hover{background:var(--hover); border-color:var(--border2)}
+.emoji-sug .es-skip{border:none; background:none; color:var(--text3); font-size:12px; cursor:pointer; text-align:left; padding:0}
+.emoji-sug .es-skip:hover{color:var(--accent-deep); text-decoration:underline}
+.app.no-left .sidebar{visibility:hidden}
+.app.no-right .rightpanel{visibility:hidden}
 .gate-feats{display:flex; gap:9px}
 .gate-feats .chip{display:flex; align-items:center; gap:7px; font-size:12px; font-weight:600; color:var(--text2);
   background:var(--panel); border:1px solid var(--border); border-radius:4px; padding:6px 13px}
@@ -475,7 +485,7 @@ table.vgrid td.fxc{color:var(--accent-deep); font-weight:600}
     </div>
     <span class="savestate" id="saveState"><i></i><span>Saved</span></span>
     <span class="spacer"></span>
-    <button class="iconbtn only-narrow" id="tglRight" title="Toggle tools"></button>
+    <button class="iconbtn" id="tglRight" title="Hide or show the tools panel"></button>
     <button class="iconbtn" id="themeBtn" title="Toggle light / dark"></button>
   </header>
 
@@ -695,67 +705,134 @@ async function sha256(str) {
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-/* ---------- SYNCRO Cloud — the little server inside this file ----------
-   A simulated cloud backend that lives in its own storage namespace
-   (syncro.cloud.v1), separate from the on-device workspace db — exactly
-   like a remote database. Every tab that opens SYNCRO talks to the same
-   "server", so an account created in one tab can be signed into from
-   another. For genuinely different devices or browsers, an account
-   travels via its portable Sync Key (SYN-1-…): the key carries the
-   profile + workspace snapshot and re-registers the account on arrival. */
+/* ---------- SYNCRO Cloud — accounts that travel with the ID ----------
+   Two transports, chosen automatically at boot:
+   • server  — the origin serves /api/cloud (a tiny accounts server). Every
+               signup/sign-in goes through it, so the same email + password
+               works from any device or browser on this origin. IDs are
+               unique across all of them.
+   • local   — no server reachable (e.g. the file opened standalone): the
+               in-file cloud lives in its own storage namespace
+               (syncro.cloud.v1) and still signs you in across every tab
+               and window of this browser. Accounts created offline merge
+               up to the server automatically whenever it appears.
+   Auth stays just an ID + a password — no recovery keys anywhere. */
 const CLOUD_KEY = 'syncro.cloud.v1';
-const NOACC_MSG = 'No account found for this email in SYNCRO Cloud. Created it on another device? Paste its sync key below — or create the account here.';
+const NOACC_MSG = 'No account for this ID in SYNCRO Cloud yet — create it below, it takes one tap.';
 const Cloud = (() => {
-  let cdb = null;
-  function load() {
+  let mode = 'local';                 // 'local' | 'server'
+  let probeP = null;
+  let cdb = null;                     // local cloud db (cache of the server, or the whole thing offline)
+  let putChain = Promise.resolve();   // serialize server writes
+  function lload() {
     try { cdb = JSON.parse(localStorage.getItem(CLOUD_KEY)) || null; } catch (e) { cdb = null; }
-    if (!cdb || typeof cdb !== 'object' || !cdb.accounts) cdb = { accounts: {} };
+    if (!cdb || typeof cdb !== 'object' || !cdb.accounts) cdb = { v: 1, accounts: {} };
     return cdb;
   }
-  function persist() { try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cdb)); } catch (e) {} }
-  const wait = () => new Promise(r => setTimeout(r, 220 + Math.random() * 300));
-  const acc = email => cdb.accounts[email] || null;
+  function lsave() { try { localStorage.setItem(CLOUD_KEY, JSON.stringify(cdb)); } catch (e) {} }
+  function cacheFromServer(sdb) { if (sdb && sdb.accounts) { cdb = sdb; lsave(); } }
+  const wait = () => new Promise(r => setTimeout(r, 160 + Math.random() * 220));
+  async function fetchDb() {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
+    try {
+      const r = await fetch('/api/cloud', { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw 0;
+      const j = await r.json();
+      return (j && j.accounts) ? j : { v: 1, accounts: {} };
+    } finally { clearTimeout(t); }
+  }
+  async function putDb(sdb) {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch('/api/cloud', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sdb), signal: ctl.signal });
+      if (!r.ok) throw 0;
+      return true;
+    } finally { clearTimeout(t); }
+  }
+  /* read-modify-write against the server; keeps every other account intact */
+  function withRemote(fn) {
+    const run = async () => {
+      const sdb = await fetchDb().catch(() => null);
+      if (!sdb) return false;
+      if (fn(sdb) === false) return true;
+      const ok = await putDb(sdb).catch(() => false);
+      if (ok) cacheFromServer(sdb);
+      return ok;
+    };
+    const p = putChain.then(run, run);
+    putChain = p.catch(() => {});
+    return p;
+  }
+  async function probe() {
+    if (probeP) return probeP;
+    probeP = (async () => {
+      lload();
+      if (location.protocol === 'file:') { mode = 'local'; return mode; }
+      const sdb = await fetchDb().catch(() => null);
+      if (!sdb) { mode = 'local'; return mode; }
+      let dirty = false;
+      for (const em of Object.keys(cdb.accounts)) if (!sdb.accounts[em]) { sdb.accounts[em] = cdb.accounts[em]; dirty = true; }
+      cacheFromServer(sdb);                       // server-only accounts join the local cache too
+      if (dirty) putDb(sdb).catch(() => {});      // offline-created accounts merge up
+      mode = 'server';
+      return mode;
+    })();
+    return probeP;
+  }
   return {
-    peek: email => { load(); return !!acc(email); },
-    ensure(email, profile, data) { load(); if (!acc(email)) { cdb.accounts[email] = { profile, data, updatedAt: now() }; persist(); } },
+    probe,
+    mode: () => mode,
+    peek(email) { lload(); return !!cdb.accounts[email]; },
+    ensure(email, profile, data) { lload(); if (!cdb.accounts[email]) { cdb.accounts[email] = { profile, data, updatedAt: now() }; lsave(); } },
     async signup(name, email, salt, hash, color, data) {
-      await wait(); load();
-      if (acc(email)) throw 'An account with this email already exists — try signing in.';
+      await wait(); lload(); await probe();
+      if (mode === 'server') {
+        const sdb = await fetchDb().catch(() => null);
+        if (sdb) {
+          if (sdb.accounts[email]) throw 'This ID is already taken — try signing in.';
+          sdb.accounts[email] = { profile: { name, email, salt, hash, color, createdAt: now() }, data, updatedAt: now() };
+          const ok = await putDb(sdb).catch(() => false);
+          if (ok) { cacheFromServer(sdb); return cdb.accounts[email]; }
+          /* server write failed — register locally instead; it merges up when the server returns */
+        }
+      }
+      if (cdb.accounts[email]) throw 'This ID is already taken — try signing in.';
       cdb.accounts[email] = { profile: { name, email, salt, hash, color, createdAt: now() }, data, updatedAt: now() };
-      persist(); return cdb.accounts[email];
+      lsave(); return cdb.accounts[email];
     },
     async login(email, pass) {
-      await wait(); load();
-      const a = acc(email);
+      await wait(); lload(); await probe();
+      let a = null;
+      if (mode === 'server') {
+        const sdb = await fetchDb().catch(() => null);
+        if (sdb) { cacheFromServer(sdb); a = sdb.accounts[email] || null; }
+      }
+      if (!a) a = cdb.accounts[email] || null;    // offline: the local cloud cache still knows you
       if (!a) throw NOACC_MSG;
       if (await sha256(a.profile.salt + pass) !== a.profile.hash) throw 'Wrong password — please try again.';
-      return a;
+      return JSON.parse(JSON.stringify(a));
     },
-    async pull(email) { await wait(); load(); const a = acc(email); return a ? a.data : null; },
-    async push(email, data) { load(); const a = acc(email); if (!a) return; a.data = data; a.updatedAt = now(); persist(); },
-    async remove(email) { await wait(); load(); delete cdb.accounts[email]; persist(); },
-    async adopt(key) {
-      await wait(); load();
-      const email = key.e;
-      const cur = acc(email);
-      if (cur && cur.profile.hash === key.h) { cur.data = key.d; cur.updatedAt = now(); persist(); return cur; }
-      cdb.accounts[email] = { profile: { name: key.n, email, salt: key.s, hash: key.h, color: key.c, createdAt: key.t || now() }, data: key.d, updatedAt: now() };
-      persist(); return cdb.accounts[email];
+    async pull(email) {
+      await wait(); lload(); await probe();
+      if (mode === 'server') {
+        const sdb = await fetchDb().catch(() => null);
+        if (sdb) { cacheFromServer(sdb); const a = sdb.accounts[email]; return a ? JSON.parse(JSON.stringify(a.data)) : null; }
+      }
+      const a = cdb.accounts[email];
+      return a ? JSON.parse(JSON.stringify(a.data)) : null;
+    },
+    async push(email, data) {
+      lload();
+      const a = cdb.accounts[email];
+      if (a) { a.data = data; a.updatedAt = now(); lsave(); }
+      if (mode === 'server') await withRemote(sdb => { const x = sdb.accounts[email]; if (!x) return false; x.data = data; x.updatedAt = now(); });
+    },
+    async remove(email) {
+      lload(); delete cdb.accounts[email]; lsave();
+      if (mode === 'server') await withRemote(sdb => { delete sdb.accounts[email]; });
     },
   };
 })();
-function syncKeyOf(u, data) {
-  const payload = { v: 1, e: u.email, n: u.name, s: u.salt, h: u.hash, c: u.color, t: u.createdAt, d: data };
-  return 'SYN-1-' + b64e(JSON.stringify(payload));
-}
-function parseSyncKey(str) {
-  const m = String(str || '').trim().match(/SYN-1-([A-Za-z0-9_\-]+)/);
-  if (!m) throw 'That does not look like a SYNCRO sync key — it should start with SYN-1-.';
-  let p;
-  try { p = JSON.parse(b64d(m[1])); } catch (e) { throw 'That sync key is damaged — copy it again on the other device.'; }
-  if (!p || p.v !== 1 || !p.e || !p.n || !p.h || !p.d || !Array.isArray(p.d.workspaces)) throw 'That sync key is damaged — copy it again on the other device.';
-  return p;
-}
 
 /* ---------- accounts ---------- */
 const AV_COLORS = [['#e4e4e7', '#a1a1aa'], ['#d4d4d8', '#8e8e94'], ['#c2c2c7', '#74747b'], ['#a9a9b0', '#5c5c63'], ['#8b8b92', '#46464c'], ['#6e6e75', '#333338']];
@@ -956,30 +1033,14 @@ function renderGateForm() {
     '<div class="form-field"><label>Password</label><input class="inp" id="gPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>' +
     '<button class="btn btn-primary btn-block" id="gSubmit" type="submit">' + (reg ? 'Create account' : 'Sign in') + '</button>' +
     (reg
-      ? '<div class="gate-hint">Saved in SYNCRO Cloud — sign in with this email and password from any device.</div>'
-      : '<button type="button" class="g-link" id="gKeyTgl">Have a sync key? Import an account from another device</button>' +
-        '<div class="g-keywrap" id="gKeyWrap"><textarea class="inp" id="gKey" rows="3" placeholder="SYN-1-… paste the key copied on your other device" spellcheck="false"></textarea>' +
-        '<button type="button" class="btn btn-block" id="gImport">Import account from sync key</button></div>');
-  const tgl = $('#gKeyTgl');
-  if (tgl) tgl.addEventListener('click', () => $('#gKeyWrap').classList.toggle('show'));
-  const imp = $('#gImport');
-  if (imp) imp.addEventListener('click', async () => {
-    const errEl = $('#gateErr'); errEl.classList.remove('show');
-    imp.disabled = true;
-    try {
-      const p = parseSyncKey($('#gKey').value);
-      const a = await Cloud.adopt(p);   // the account registers with SYNCRO Cloud on this device too
-      const em = a.profile.email;
-      db.users[em] = { name: a.profile.name, email: a.profile.email, salt: a.profile.salt, hash: a.profile.hash, color: a.profile.color, createdAt: a.profile.createdAt };
-      db.data[em] = JSON.parse(JSON.stringify(a.data));
-      saveNow();
-      toast('Account imported — it now signs in on this device as well.', 'ok');
-      startSession(db.users[em]);
-    } catch (err) {
-      errEl.textContent = err; errEl.classList.add('show');
-      $('#gKeyWrap').classList.add('show');
-      imp.disabled = false;
-    }
+      ? '<div class="gate-hint">One email + one password — your ID is unique and signs in on any device.</div>'
+      : '<div class="g-keywrap" id="gNoAccWrap"><button type="button" class="btn btn-block" id="gNoAcc">Create this ID now</button></div>');
+  const na = $('#gNoAcc');
+  if (na) na.addEventListener('click', () => {
+    const em = $('#gEmail') ? $('#gEmail').value.trim() : '';
+    if (em) db.lastLogin = em;
+    gateMode = 'register';
+    showGate('register');
   });
 }
 async function gateSubmit(e) {
@@ -993,7 +1054,7 @@ async function gateSubmit(e) {
     startSession(u);
   } catch (err) {
     errEl.textContent = err; errEl.classList.add('show');
-    if (err === NOACC_MSG) { const w = $('#gKeyWrap'); if (w) { w.classList.add('show'); const k = $('#gKey'); if (k) k.focus(); } }
+    if (err === NOACC_MSG) { const w = $('#gNoAccWrap'); if (w) w.classList.add('show'); }
     btn.disabled = false;
   }
 }
@@ -1055,26 +1116,19 @@ function settingsModal() {
       '<button class="btn btn-sm" id="sLogout">' + I.logout(14) + 'Log out</button></div></div>' +
     (!session.guest
       ? '<div class="label" style="margin-top:10px">SYNCRO Cloud</div>' +
-        '<div class="set-row"><div class="s-info"><div class="s-t">Cross-device sign-in</div><div class="s-d">Open SYNCRO anywhere and sign in with this email and password. Two tabs of this browser already act as two devices; the sync key below moves the account anywhere else.</div></div></div>' +
-        '<div class="set-row"><div class="s-info"><div class="s-t">Sync key</div><div class="s-d">A portable code carrying this account and its documents — paste it into SYNCRO on any device to sign in there.</div></div>' +
-        '<button class="btn btn-sm" id="sSyncKey">' + I.copy(14) + 'Copy key</button></div>'
+        '<div class="set-row"><div class="s-info"><div class="s-t">Cross-device sign-in</div><div class="s-d">' +
+        (Cloud.mode() === 'server'
+          ? 'Connected to the SYNCRO Cloud server — sign in on any device with just this email and password. Every ID is unique.'
+          : 'On-device cloud active — sign in with this email and password in any tab or window of this browser.') + '</div></div></div>'
       : '') +
     '<div class="label" style="margin-top:10px;color:var(--danger)">Danger zone</div>' +
     '<div class="set-row"><div class="s-info"><div class="s-t">Delete account</div><div class="s-d">Removes your account from SYNCRO Cloud and this device, with every document</div></div>' +
       '<button class="btn btn-sm btn-danger" id="sDelete">' + I.trash(14) + 'Delete</button></div>' +
-    '<div class="rp-hint" style="margin-top:10px">Accounts sync through SYNCRO Cloud — the little server inside this file. A local copy stays on this device for offline use. Version 1.1</div></div>', { wide: true });
+    '<div class="rp-hint" style="margin-top:10px">Accounts sync through SYNCRO Cloud with just an ID and a password — no keys to keep. A local copy stays on this device for offline use. Version 1.2</div></div>', { wide: true });
   $('#thLight').addEventListener('click', () => { applyTheme('light'); saveSoon(); settingsModal(); });
   $('#thDark').addEventListener('click', () => { applyTheme('dark'); saveSoon(); settingsModal(); });
   const sCreate = $('#sCreate');
   if (sCreate) sCreate.addEventListener('click', () => { closeModal(); authModal(); });
-  const sSyncKey = $('#sSyncKey');
-  if (sSyncKey) sSyncKey.addEventListener('click', () => {
-    const u = db.users[session.email];
-    if (!u) return;
-    copyText(syncKeyOf(u, db.data[session.email] || myData()))
-      .then(() => toast('Sync key copied — paste it into SYNCRO on another device.', 'ok'))
-      .catch(() => toast('Could not reach the clipboard on this browser.', 'err'));
-  });
   $('#sLogout').addEventListener('click', () => { closeModal(); logout(); });
   $('#sDelete').addEventListener('click', () => {
     closeModal();
@@ -1505,6 +1559,7 @@ function wireFontUI() {
     else if (blk === 'hr') { document.execCommand('insertHTML', false, '<hr><p><br></p>'); }
     else document.execCommand('formatBlock', false, blk);
     noteEd.focus();
+    if (blk === 'h1' || blk === 'h2' || blk === 'h3') suggestHeadingEmoji();
   });
   $('#textColors').addEventListener('click', e => {
     const b = e.target.closest('[data-tc]'); if (!b || !noteEd) return;
@@ -2175,6 +2230,58 @@ function renderViewer(payload) {
 }
 
 /* =================== topbar / panels / init =================== */
+/* ---------- heading emoji suggestions ----------
+   When a heading (H1/H2/H3) is created, offer 15 hand-picked topic icons;
+   tapping one drops it at the very start of the heading line. */
+const HEADING_EMOJIS = ['📌','🎯','🚀','💡','📈','✅','🔥','⚡','🧠','🗓️','🎨','💼','🔍','🛠️','⭐'];
+let emojiPop = null;
+function closeEmojiPop() {
+  if (!emojiPop) return;
+  emojiPop.remove(); emojiPop = null;
+  document.removeEventListener('mousedown', emojiOutside, true);
+  window.removeEventListener('scroll', closeEmojiPop, true);
+  window.removeEventListener('resize', closeEmojiPop);
+}
+function emojiOutside(e) { if (emojiPop && !emojiPop.contains(e.target)) closeEmojiPop(); }
+function suggestHeadingEmoji() {
+  closeEmojiPop();
+  if (!noteEd) return;
+  const sel = window.getSelection();
+  if (!sel || !sel.anchorNode || !noteEd.contains(sel.anchorNode)) return;
+  const startEl = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+  const h = startEl && startEl.closest ? startEl.closest('h1,h2,h3') : null;
+  if (!h || !noteEd.contains(h)) return;
+  const t = (h.textContent || '').trim();
+  if (HEADING_EMOJIS.some(e => t.startsWith(e))) return;
+  const pop = document.createElement('div');
+  pop.className = 'emoji-sug';
+  pop.innerHTML = '<div class="es-title">Give this topic an icon <span>— tap one and it leads the heading</span></div>' +
+    '<div class="es-row">' + HEADING_EMOJIS.map(e => '<button type="button" class="e" data-e="' + e + '">' + e + '</button>').join('') + '</div>' +
+    '<button type="button" class="es-skip">No icon, thanks</button>';
+  document.body.appendChild(pop);
+  const r = h.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let x = Math.min(Math.max(8, r.left), window.innerWidth - pw - 8);
+  let y = r.bottom + 6;
+  if (y + ph > window.innerHeight - 8) y = Math.max(8, r.top - ph - 6);
+  pop.style.left = x + 'px'; pop.style.top = y + 'px';
+  pop.addEventListener('click', ev => {
+    const b = ev.target.closest('.e');
+    if (b) {
+      h.insertBefore(document.createTextNode(b.dataset.e + ' '), h.firstChild);
+      markDirty();
+      closeEmojiPop();
+      noteEd.focus();
+    } else if (ev.target.closest('.es-skip')) closeEmojiPop();
+  });
+  emojiPop = pop;
+  setTimeout(() => {
+    document.addEventListener('mousedown', emojiOutside, true);
+    window.addEventListener('scroll', closeEmojiPop, true);
+    window.addEventListener('resize', closeEmojiPop);
+  }, 0);
+}
+
 function wireChrome() {
   $('#themeBtn').addEventListener('click', toggleTheme);
   $('#gateTheme').addEventListener('click', toggleTheme);
@@ -2185,7 +2292,7 @@ function wireChrome() {
   });
   $('#tglRight').addEventListener('click', () => {
     if (window.innerWidth <= 1180) document.body.classList.toggle('rp-open');
-    else $('#app').classList.toggle('no-right');
+    else { const app = $('#app'); app.classList.toggle('no-right'); db.rpHidden = app.classList.contains('no-right'); saveNow(); }
   });
   $('#backdrop').addEventListener('click', () => document.body.classList.remove('sb-open', 'rp-open'));
   $('#gearBtn').addEventListener('click', settingsModal);
@@ -2251,6 +2358,7 @@ function enterApp() {
   $('#pMail').textContent = session.guest ? 'Untitled · local only' : session.email + ' · cloud';
   $('#profileRow').classList.toggle('untitled', !!session.guest);
   applyTheme(db.theme);
+  $('#app').classList.toggle('no-right', !!(db.rpHidden && window.innerWidth > 1180));
   updateShareUI();
   renderSidebar();
   openDoc(d.lastDoc && d.nodes[d.lastDoc] && d.nodes[d.lastDoc].ws === current.wsId ? d.lastDoc : null);
@@ -2274,6 +2382,7 @@ function init() {
     const u = db.users[em];
     Cloud.ensure(em, { name: u.name, email: u.email, salt: u.salt, hash: u.hash, color: u.color, createdAt: u.createdAt }, db.data[em] || seedData(u.name));
   }
+  Cloud.probe();   // detect /api/cloud and go online when it exists
   buildFloatTb();
   fillFontUI();
   wireFontUI();
