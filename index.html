@@ -657,6 +657,12 @@ app-view{display:block}
 
 /* toast error */
 .toast.err b{color:#ff9d9d}
+
+/* footer live-mode chip */
+#modeChip{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted-fg)}
+.mode-dot{width:7px;height:7px;border-radius:50%;background:var(--muted-fg);opacity:.45;flex-shrink:0}
+.mode-dot.on{background:#22c55e;opacity:1;box-shadow:0 0 0 3px rgba(34,197,94,.18);animation:pulseDot 2.2s ease-in-out infinite}
+@keyframes pulseDot{0%,100%{box-shadow:0 0 0 3px rgba(34,197,94,.18)}50%{box-shadow:0 0 0 6px rgba(34,197,94,.08)}}
 </style>
 </head>
 <body id="top">
@@ -931,7 +937,7 @@ app-view{display:block}
     </div>
     <div class="footer-bar">
       <p>© <span id="yr">2026</span> UNFOTABLE — built in the open.</p>
-      <p>everything you create · one universe</p>
+      <p id="modeChip">everything you create · one universe</p>
     </div>
   </div>
 </footer>
@@ -1031,17 +1037,82 @@ function loadDB() {
   return true;
 }
 function persist(broadcast) {
+  /* cloud mode: the shared server is the store — local writes are not the truth */
+  if (MODE === "cloud") { if (broadcast !== false) ping(); return; }
   try { localStorage.setItem(DBK, JSON.stringify(db)); } catch (e) {}
   if (broadcast !== false) ping();
 }
-function setSession(id) { try { localStorage.setItem(SK, JSON.stringify({ id: id, t: Date.now() })); } catch (e) {} }
+function setSession(id) { if (MODE === "cloud") return; try { localStorage.setItem(SK, JSON.stringify({ id: id, t: Date.now() })); } catch (e) {} }
 function clearSession() { try { localStorage.removeItem(SK); } catch (e) {} }
 function resolveSession() {
   me = null;
+  if (MODE === "cloud") return; /* boot() resolves me from the server session token */
   try {
     var s = JSON.parse(localStorage.getItem(SK) || "null");
     if (s && s.id != null) me = userById(s.id) || null;
   } catch (e) {}
+}
+
+/* ---------- cloud layer (ONE shared live website) ----------
+   When /api/state answers, the site runs on a shared server database:
+   the owner's edits change THE website for every visitor. Without the
+   API (plain static hosting / file://) it falls back to local mode. */
+var MODE = "local", cloudVer = -1;
+var TK = "unfotable.token.v1";
+function tokGet() { try { return localStorage.getItem(TK) || ""; } catch (e) { return ""; } }
+function tokSet(t) { try { localStorage.setItem(TK, t); } catch (e) {} }
+function tokClear() { try { localStorage.removeItem(TK); } catch (e) {} }
+function apiHeaders() {
+  var h = { "Content-Type": "application/json" };
+  var t = tokGet(); if (t) h["Authorization"] = "Bearer " + t;
+  return h;
+}
+function apiAct(action, args) {
+  return fetch("/api/act", { method: "POST", headers: apiHeaders(), body: JSON.stringify({ action: action, args: args || {} }) })
+    .then(function (r) { return r.json().catch(function () { return { ok: false, error: "Server error — try again." }; }); })
+    .then(function (j) {
+      if (!j || !j.ok) { var e = new Error((j && j.error) || "Server refused that action."); e.clientMsg = (j && j.error) || null; throw e; }
+      if (j.state) applyState(j.state);
+      if (j.token) tokSet(j.token);
+      return j;
+    });
+}
+function publicUserToDbUser(u) {
+  return { id: u.id, username: u.username, displayName: u.displayName, role: u.role || "member",
+    color: u.color || PALETTE[0], bio: u.bio || "", salt: "", hash: "", createdAt: u.createdAt || Date.now() };
+}
+function applyState(st) {
+  db.users = (st.users || []).map(publicUserToDbUser);
+  db.projects = st.projects || [];
+  if (st.site) db.site = st.site;
+  db.v = st.v; cloudVer = st.v;
+  if (!db.seq) db.seq = { u: 0, p: 0 };
+  if (me) me = userById(me.id) || null; /* account may have been removed server-side */
+}
+async function fetchCloudState() {
+  var r = await fetch("/api/state", { headers: { "Accept": "application/json" } });
+  if (!r.ok) throw new Error("no api");
+  var j = await r.json();
+  if (!j || !j.state || j.state.v == null) throw new Error("no api");
+  return j.state;
+}
+function startCloudSync() {
+  function typing() {
+    var a = document.activeElement;
+    return !!a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA");
+  }
+  setInterval(async function () {
+    if (document.hidden || !navigator.onLine) return;
+    try {
+      var st = await fetchCloudState();
+      if (st.v !== cloudVer) {
+        applyState(st);
+        renderNav();
+        if (!typing()) { renderRoute(); renderLanding(); }
+        else applySiteCopy();
+      }
+    } catch (e) {}
+  }, 1000);
 }
 
 /* ---------- seed (mirrors the live database) ---------- */
@@ -1174,7 +1245,15 @@ function ownerBadge() { return '<span class="owner-badge">' + ic("shield") + "Ow
 
 /* ---------- cross-tab live sync (≤1s) ---------- */
 function ping() { try { if (bc) bc.postMessage({ t: Date.now() }); } catch (e) {} }
+async function pullCloudOnce() {
+  try {
+    var st = await fetchCloudState();
+    applyState(st);
+    renderNav(); renderRoute();
+  } catch (e) {}
+}
 function onRemote() {
+  if (MODE === "cloud") { pullCloudOnce(); return; }
   loadDB(); if (!db) { db = buildSeed(); }
   resolveSession();
   renderNav();
@@ -1269,6 +1348,7 @@ function renderNav() {
   }
 }
 function doSignOut() {
+  if (MODE === "cloud") { apiAct("logout", {}).catch(function () {}); tokClear(); }
   clearSession(); me = null; ping();
   renderNav(); closeModal(); closeSheet();
   toastMsg("<b>Signed out</b> — see you soon.");
@@ -1437,6 +1517,17 @@ function renderAuth(mode) {
       if (userByName(username)) { $("#uname").classList.add("err"); showFormErr("That ID is taken — try another spelling."); return; }
       if (pw.length < 8) { $("#pw").classList.add("err"); showFormErr("Password needs at least 8 characters."); return; }
       var btn = $("#signupGo"); btn.disabled = true; btn.innerHTML = "Creating your universe…";
+      if (MODE === "cloud") {
+        apiAct("signup", { displayName: displayName, username: username, password: pw })
+        .then(function (j) {
+          me = userByName(username) || null;
+          renderNav();
+          toastMsg("<b>Welcome to UNFOTABLE</b> — /u/" + esc(username) + " is yours.");
+          location.hash = "#/u/" + username;
+        })
+        .catch(function (e) { btn.disabled = false; btn.innerHTML = ic("plus") + "Create my ID"; showFormErr(e.clientMsg || "Something went wrong — please try again."); });
+        return;
+      }
       mkSaltAsync(username).then(function (salt) { return hashPass(pw, salt).then(function (hash) { return { salt: salt, hash: hash }; }); })
       .then(function (h) {
         var u = {
@@ -1473,6 +1564,17 @@ function renderAuth(mode) {
       if (!username || !pw) { showFormErr("Enter your ID and password."); return; }
       var u = userByName(username);
       var btn = $("#loginGo"); btn.disabled = true;
+      if (MODE === "cloud") {
+        apiAct("login", { username: username, password: pw })
+        .then(function (j) {
+          me = userByName(username) || null;
+          renderNav();
+          toastMsg("<b>Signed in</b> — welcome back, " + esc((j.user && j.user.displayName || username).split(" ")[0]) + ".");
+          location.hash = "#/dashboard";
+        })
+        .catch(function (e) { btn.disabled = false; showFormErr(e.clientMsg || "Sign-in failed — please try again."); });
+        return;
+      }
       var check = u ? hashPass(pw, u.salt || "") : Promise.resolve("_x_");
       check.then(function (hash) {
         if (!u || hash !== u.hash) {
@@ -1576,6 +1678,17 @@ function openProfileForm(u, ownerMode) {
     e.preventDefault();
     var n = $("#pfn").value.trim();
     if (n.length < 2) { toastMsg("Display name needs at least 2 characters.", true); return; }
+    if (MODE === "cloud") {
+      apiAct("profile", { id: u.id, displayName: n, bio: $("#pfb").value.trim(), color: $("#pfColor").value || u.color })
+      .then(function () {
+        closeModal();
+        renderNav();
+        renderRoute(); renderLanding();
+        toastMsg("<b>Profile updated</b> — live everywhere.");
+      })
+      .catch(function (er) { toastMsg(er.clientMsg || "Could not save — please try again.", true); });
+      return;
+    }
     u.displayName = n;
     u.bio = $("#pfb").value.trim();
     u.color = $("#pfColor").value || u.color;
@@ -1627,6 +1740,18 @@ function openProjectForm(p) {
       tags: tags, description: $("#pjd").value.trim() || "A new signal in the universe.",
       color: $("#pjColor").value || cur.color
     };
+    if (MODE === "cloud") {
+      var cloudArgs = Object.assign({}, data);
+      if (isEdit) cloudArgs.id = p.id;
+      apiAct(isEdit ? "proj:edit" : "proj:new", cloudArgs)
+      .then(function () {
+        closeModal();
+        renderRoute(); renderLanding();
+        toastMsg(isEdit ? "<b>" + esc(title) + "</b> updated." : "<b>" + esc(title) + "</b> connected to your universe.");
+      })
+      .catch(function (er) { toastMsg(er.clientMsg || "Could not save — please try again.", true); });
+      return;
+    }
     if (isEdit) {
       Object.assign(p, data, { updatedAt: Date.now() });
       if (p.title !== title) { /* keep slug stable so links never break */ }
@@ -1654,6 +1779,16 @@ function openDeleteProject(p) {
     '<button class="btn btn-outline" data-mclose>Keep it</button></div>'
   );
   $("#delGo").addEventListener("click", function () {
+    if (MODE === "cloud") {
+      apiAct("proj:del", { id: p.id })
+      .then(function () {
+        closeModal();
+        toastMsg("<b>" + esc(p.title) + "</b> removed from the universe.");
+        renderRoute(); renderLanding();
+      })
+      .catch(function (er) { toastMsg(er.clientMsg || "Could not delete — please try again.", true); });
+      return;
+    }
     db.projects = db.projects.filter(function (x) { return x.id !== p.id; });
     persist();
     closeModal();
@@ -1776,7 +1911,7 @@ function bindStudio() {
   var f = $("#studioForm"); if (!f) return;
   f.addEventListener("submit", function (e) {
     e.preventDefault();
-    db.site = {
+    var copy = {
       heroL1: $("#stHeroL1").value.trim() || "Everything you create.",
       heroL2: $("#stHeroL2").value.trim() || "One universe.",
       heroLede: $("#stLede").value.trim(),
@@ -1784,14 +1919,33 @@ function bindStudio() {
       finalL2: $("#stFinalL2").value.trim() || "of the internet.",
       finalP: $("#stFinalP").value.trim()
     };
+    var flag = function () {
+      var fl = $("#savedFlag");
+      if (fl) { fl.classList.add("show"); setTimeout(function () { fl.classList.remove("show"); }, 2400); }
+    };
+    if (MODE === "cloud") {
+      apiAct("site:set", copy)
+      .then(function () {
+        renderLanding(); flag();
+        toastMsg("<b>Website updated</b> — live for everyone, everywhere.");
+      })
+      .catch(function (er) { toastMsg(er.clientMsg || "Could not save — please try again.", true); });
+      return;
+    }
+    db.site = copy;
     persist();
     renderLanding();
-    var flag = $("#savedFlag");
-    if (flag) { flag.classList.add("show"); setTimeout(function () { flag.classList.remove("show"); }, 2400); }
+    flag();
     toastMsg("<b>Website updated</b> — live for everyone.");
   });
 }
 function moveMine(id, dir) {
+  if (MODE === "cloud") {
+    apiAct("proj:move", { id: id, dir: dir, scope: "mine" })
+    .then(function () { renderRoute(); renderLanding(); })
+    .catch(function (er) { toastMsg(er.clientMsg || "Could not move — please try again.", true); });
+    return;
+  }
   var list = ownedProjects(me);
   var i = list.findIndex(function (p) { return p.id === id; });
   var j = i + dir;
@@ -1800,6 +1954,15 @@ function moveMine(id, dir) {
   persist(); renderRoute(); renderLanding();
 }
 function moveGlobal(id, dir) {
+  if (MODE === "cloud") {
+    apiAct("proj:move", { id: id, dir: dir, scope: "global" })
+    .then(function () {
+      renderRoute(); renderLanding();
+      toastMsg("<b>Order saved</b> — the live universe rearranged itself for every visitor.");
+    })
+    .catch(function (er) { toastMsg(er.clientMsg || "Could not move — please try again.", true); });
+    return;
+  }
   var list = allByOrder();
   var i = list.findIndex(function (p) { return p.id === id; });
   var j = i + dir;
@@ -1814,6 +1977,16 @@ function swapOrder(a, b) {
 }
 function toggleStar(id) {
   var p = projById(id); if (!p || !canManage(p)) return;
+  if (MODE === "cloud") {
+    apiAct("proj:star", { id: id })
+    .then(function () {
+      var np = projById(id);
+      renderRoute(); renderLanding();
+      toastMsg(np && np.featured ? "<b>" + esc(np.title) + "</b> pinned to the live landing strip." : "<b>" + esc(np.title) + "</b> unpinned from the landing strip.");
+    })
+    .catch(function (er) { toastMsg(er.clientMsg || "Could not update — please try again.", true); });
+    return;
+  }
   p.featured = !p.featured;
   p.updatedAt = Date.now();
   persist(); renderRoute(); renderLanding();
@@ -1869,7 +2042,9 @@ function renderProject(slug) {
 /* ---------- legal modals ---------- */
 function openLegal(kind) {
   var body = kind === "privacy"
-    ? "This deployment keeps everything on your device: accounts, sessions and projects live in this browser's local storage and sync across your open tabs. Nothing is sent to a server, nothing is tracked, and clearing site data resets the universe to its seed state."
+    ? (MODE === "cloud"
+      ? "This deployment runs on a shared server database: accounts, sessions and projects live in one place, so the owner's edits reach every visitor within a second. Sessions are token-based and passwords are never stored in plain text. Sign out on shared machines."
+      : "This deployment keeps everything on your device: accounts, sessions and projects live in this browser's local storage and sync across your open tabs. Nothing is sent to a server, nothing is tracked, and clearing site data resets the universe to its seed state. Deploy it with the included Cloudflare Worker to switch to shared mode.")
     : "UNFOTABLE is a demo universe you are free to rearrange. Be kind in bios and project descriptions, don't impersonate other creators, and remember that anyone using this browser shares its storage — sign out on shared machines.";
   openModal(modalHead(kind === "privacy" ? "Privacy" : "Terms") +
     '<p class="confirm-body">' + body + "</p>" +
@@ -1984,15 +2159,41 @@ function closeSheet() {
   sheet.setAttribute("aria-hidden", "true");
 }
 
+function setModeChip() {
+  var mc = $("#modeChip"); if (!mc) return;
+  mc.innerHTML = MODE === "cloud"
+    ? '<span class="mode-dot on"></span>live — one shared universe · owner edits reach every visitor'
+    : '<span class="mode-dot"></span>local mode — this browser only · deploy with the worker for shared live mode';
+}
+
 async function boot() {
-  if (!loadDB()) db = buildSeed();
-  await ensureSeedHashes();
+  /* shared server first — the REAL live website (one copy for everyone) */
+  try {
+    var st = await Promise.race([
+      fetchCloudState(),
+      new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, 2500); })
+    ]);
+    MODE = "cloud";
+    db = buildSeed(); /* skeleton: seq + defaults */
+    applyState(st);
+  } catch (e) { MODE = "local"; }
+  if (MODE === "cloud") {
+    if (tokGet()) {
+      try { var mj = await apiAct("me", {}); me = userByName(mj.user.username) || null; }
+      catch (er) { tokClear(); }
+    }
+  } else {
+    if (!loadDB()) db = buildSeed();
+    await ensureSeedHashes();
+  }
   resolveSession();
   bindOnce();
+  setModeChip();
   renderNav();
   renderLanding();
   window.addEventListener("hashchange", renderRoute);
   renderRoute();
+  if (MODE === "cloud") startCloudSync();
 }
 boot();
 })();
