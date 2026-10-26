@@ -1,12 +1,4 @@
-<div align="center">
-
-```text
- ____  __   __ _   _   ____  ____    ___
-/ ___| \ \ / /| \ | | / ___||  _ \  / _ \
-\___ \  \ V / |  \| || |    | |_) || | | |
- ___) |  | |  | |\  || |___ |  _ < | |_| |
-|____/   |_|  |_| \_| \____||_| \_\ \___/
-```
+<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/e4c87716-1a52-4a8b-808a-8d1bf0c19f93" />
 
 **Notes, sheets and boards, in sync with your flow.**
 
