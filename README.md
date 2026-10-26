@@ -1,7 +1,5 @@
 <div align="center">
-
-<img src="assets/banner.svg" alt="<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/d2308d0d-9351-4dad-9591-cd5f62ddc961" />
-w" width="100%">
+<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/4cc1d7a3-df4b-462c-b3bd-84261100ee71" />
 
 <br><br>
 
