@@ -1,26 +1,34 @@
 <div align="center">
 
-  
-<img src="https://img.shields.io/badge/HTML5-282420?style=for-the-badge&logo=html5&logoColor=E34F26" alt="HTML5">
-<img src="https://img.shields.io/badge/CSS3-282420?style=for-the-badge&logo=css3&logoColor=1572B6" alt="CSS3">
-<img src="https://img.shields.io/badge/JavaScript-282420?style=for-the-badge&logo=javascript&logoColor=F7DF1E" alt="JavaScript">
-<img src="https://img.shields.io/badge/build_step-none-3fae44?style=for-the-badge&labelColor=282420" alt="No build step">
-<img src="https://img.shields.io/badge/dependencies-0-3fae44?style=for-the-badge&labelColor=282420" alt="Zero dependencies">  
-  
-  <img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/4cc1d7a3-df4b-462c-b3bd-84261100ee71" />
+```text
+ ____  __   __ _   _   ____  ____    ___
+/ ___| \ \ / /| \ | | / ___||  _ \  / _ \
+\___ \  \ V / |  \| || |    | |_) || | | |
+ ___) |  | |  | |\  || |___ |  _ < | |_| |
+|____/   |_|  |_| \_| \____||_| \_\ \___/
+```
 
-<br><br>
+**Notes, sheets and boards, in sync with your flow.**
+
+<a href="https://github.com/UNFOTABLE01/syncro/stargazers"><img src="https://img.shields.io/github/stars/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=dfb317&logo=github&logoColor=white" alt="stars"></a>
+<a href="https://github.com/UNFOTABLE01/syncro/network/members"><img src="https://img.shields.io/github/forks/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=007ec6&logo=github&logoColor=white" alt="forks"></a>
+<a href="https://github.com/UNFOTABLE01/syncro/issues"><img src="https://img.shields.io/github/issues/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=e05d44&logo=github&logoColor=white" alt="issues"></a>
+<a href="https://github.com/UNFOTABLE01/syncro/commits/main"><img src="https://img.shields.io/github/last-commit/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=3fae44&logo=github&logoColor=white" alt="last-commit"></a>
+<a href="https://github.com/UNFOTABLE01/syncro"><img src="https://img.shields.io/github/repo-size/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=8b8b92&logo=github&logoColor=white" alt="repo-size"></a>
+<br>
+<img src="https://img.shields.io/badge/HTML-5-e34f26?style=flat&labelColor=2b2b2b&logo=html5&logoColor=white" alt="HTML: 5">
+<img src="https://img.shields.io/badge/CSS-3-1572b6?style=flat&labelColor=2b2b2b&logo=css3&logoColor=white" alt="CSS: 3">
+<img src="https://img.shields.io/badge/JavaScript-vanilla-f7df1e?style=flat&labelColor=2b2b2b&logo=javascript&logoColor=black" alt="JavaScript: vanilla">
+<img src="https://img.shields.io/badge/build-no_build_step-3fae44?style=flat&labelColor=2b2b2b" alt="build: no build step">
+<img src="https://img.shields.io/badge/dependencies-0-3fae44?style=flat&labelColor=2b2b2b" alt="dependencies: 0">
+<br>
+<img src="https://img.shields.io/badge/themes-dark_and_light-282420?style=flat&labelColor=2b2b2b" alt="themes: dark and light">
+<a href="#-contributing"><img src="https://img.shields.io/badge/PRs-welcome-4c1?style=flat&labelColor=2b2b2b" alt="PRs: welcome"></a>
+<a href="https://deepwiki.com/UNFOTABLE01/syncro"><img src="https://img.shields.io/badge/DeepWiki-Ask-007ec6?style=flat&labelColor=2b2b2b" alt="DeepWiki: Ask"></a>
+
 <br>
 
-<a href="https://github.com/UNFOTABLE01/syncro/stargazers"><img src="https://img.shields.io/github/stars/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d&logo=github" alt="Stars"></a>
-<a href="https://github.com/UNFOTABLE01/syncro/network/members"><img src="https://img.shields.io/github/forks/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d" alt="Forks"></a>
-<a href="https://github.com/UNFOTABLE01/syncro/issues"><img src="https://img.shields.io/github/issues/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d" alt="Issues"></a>
-<a href="https://github.com/UNFOTABLE01/syncro/commits/main"><img src="https://img.shields.io/github/last-commit/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d" alt="Last commit"></a>
-<img src="https://img.shields.io/github/repo-size/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d" alt="Repo size">
-
-<br><br>
-
-<a href="#-tour">Tour</a> &nbsp;|&nbsp;
+<a href="#-modules">Modules</a> &nbsp;|&nbsp;
 <a href="#-features">Features</a> &nbsp;|&nbsp;
 <a href="#-how-it-flows">Flow</a> &nbsp;|&nbsp;
 <a href="#-under-the-hood">Under the hood</a> &nbsp;|&nbsp;
@@ -30,11 +38,7 @@
 
 </div>
 
-<br>
-
-<img src="assets/divider.svg" alt="" width="100%">
-
-<br>
+---
 
 ## 👋 Meet SYNCRO
 
@@ -44,19 +48,28 @@ Write a note. Crunch numbers with real formulas. Drag cards across a kanban boar
 
 > We are a team of designers and developers with one mission: build a website that makes life easier. SYNCRO blends smart features, intuitive design and useful tools into one seamless place, so everyday complexity turns into simplicity.
 
-<img src="assets/stats.svg" alt="3 document types, 0 dependencies, 1 file to open, 2 themes, 7 typefaces" width="100%">
+<p align="center">
+<img src="https://img.shields.io/badge/document_types-3-282420?style=flat&labelColor=2b2b2b" alt="document types: 3">
+<img src="https://img.shields.io/badge/dependencies-0-3fae44?style=flat&labelColor=2b2b2b" alt="dependencies: 0">
+<img src="https://img.shields.io/badge/files_to_open-1-282420?style=flat&labelColor=2b2b2b" alt="files to open: 1">
+<img src="https://img.shields.io/badge/themes-2-282420?style=flat&labelColor=2b2b2b" alt="themes: 2">
+<img src="https://img.shields.io/badge/typefaces-7-282420?style=flat&labelColor=2b2b2b" alt="typefaces: 7">
+<img src="https://img.shields.io/badge/app_size-~141_KB-8b8b92?style=flat&labelColor=2b2b2b" alt="app size: ~141 KB">
+</p>
 
 <br>
 
-## 📸 Tour
+## 🧩 Modules
 
 Every screen has the same three-part layout: a **document tree** on the left, the **editor** in the middle, and a **tools panel** on the right that adapts to whatever you are editing.
 
-> Preview images show the sample workspace you get on first launch.
-
 ### 📝 Notes
 
-<img src="assets/preview-note.svg" alt="SYNCRO note editor with a document tree, rich text, checklist, floating format bar and a tools panel" width="100%">
+<img src="https://img.shields.io/badge/checklists-tick_them_off-3fae44?style=flat&labelColor=2b2b2b" alt="checklists: tick them off">
+<img src="https://img.shields.io/badge/format_bar-floating-282420?style=flat&labelColor=2b2b2b" alt="format bar: floating">
+<img src="https://img.shields.io/badge/blocks-quote%2C_code%2C_divider-282420?style=flat&labelColor=2b2b2b" alt="blocks: quote, code, divider">
+<img src="https://img.shields.io/badge/fonts-mix_on_one_page-282420?style=flat&labelColor=2b2b2b" alt="fonts: mix on one page">
+<img src="https://img.shields.io/badge/colour-text_and_highlight-282420?style=flat&labelColor=2b2b2b" alt="colour: text and highlight">
 
 - Headings, bold, italic, underline, strikethrough, bullet and numbered lists
 - Real **checklists** you can tick off, plus quotes, code blocks, dividers and links
@@ -65,7 +78,10 @@ Every screen has the same three-part layout: a **document tree** on the left, th
 
 ### 🧮 Sheets
 
-<img src="assets/preview-sheet.svg" alt="SYNCRO spreadsheet with a formula bar, column letters, row numbers and calculated totals" width="100%">
+<img src="https://img.shields.io/badge/formulas-SUM_AVG_MIN_MAX_ROUND-3fae44?style=flat&labelColor=2b2b2b" alt="formulas: SUM AVG MIN MAX ROUND">
+<img src="https://img.shields.io/badge/formula_bar-built_in-282420?style=flat&labelColor=2b2b2b" alt="formula bar: built in">
+<img src="https://img.shields.io/badge/headers-sticky-282420?style=flat&labelColor=2b2b2b" alt="headers: sticky">
+<img src="https://img.shields.io/badge/errors-shown_in_the_cell-282420?style=flat&labelColor=2b2b2b" alt="errors: shown in the cell">
 
 - A proper grid with sticky headers, a **formula bar** and a highlighted active cell
 - Formulas such as `=SUM`, `=AVG`, `=MIN`, `=MAX`, `=ROUND` and plain arithmetic like `=B2-C2`
@@ -73,17 +89,16 @@ Every screen has the same three-part layout: a **document tree** on the left, th
 
 ### 🗂 Boards
 
-<img src="assets/preview-board.svg" alt="SYNCRO kanban board with Backlog, In progress and Done lists and a card being dragged between them" width="100%">
+<img src="https://img.shields.io/badge/drag_and_drop-lists_and_cards-3fae44?style=flat&labelColor=2b2b2b" alt="drag and drop: lists and cards">
+<img src="https://img.shields.io/badge/edit-in_place-282420?style=flat&labelColor=2b2b2b" alt="edit: in place">
+<img src="https://img.shields.io/badge/card_colours-dot_tags-282420?style=flat&labelColor=2b2b2b" alt="card colours: dot tags">
+<img src="https://img.shields.io/badge/lists-add_and_rename-282420?style=flat&labelColor=2b2b2b" alt="lists: add and rename">
 
 - Lists and cards you can **drag and drop**, with the target list lighting up as you hover
 - Click a card to edit it in place, tag it with a colour dot, delete it with one click
 - Rename lists inline and add new ones with a single tap
 
-<br>
-
-<img src="assets/divider.svg" alt="" width="100%">
-
-<br>
+---
 
 ## ⚡ Features
 
@@ -317,11 +332,8 @@ The repo ships the front end only. If your host serves `/api/cloud`, SYNCRO swit
 
 </details>
 
-<br>
 
-<img src="assets/divider.svg" alt="" width="100%">
-
-<br>
+---
 
 ## 🚀 Quick start
 
@@ -375,7 +387,16 @@ npx serve .
 
 SYNCRO looks the way it does on purpose: **ink on paper.** The whole interface is black, white and grey with tight 2 to 4 px corners, so the one green dot in the logo is the only colour on screen.
 
-<img src="assets/palette.svg" alt="SYNCRO colour palette: brand ink, paper and green, plus dark and light theme tokens" width="100%">
+<p>
+<img src="https://img.shields.io/badge/ink-%23282420-282420?style=flat&labelColor=2b2b2b" alt="ink: #282420">
+<img src="https://img.shields.io/badge/paper-%23f2efe8-f2efe8?style=flat&labelColor=2b2b2b" alt="paper: #f2efe8">
+<img src="https://img.shields.io/badge/signal_dot-%233fae44-3fae44?style=flat&labelColor=2b2b2b" alt="signal dot: #3fae44">
+<img src="https://img.shields.io/badge/dark_canvas-%230c0c0d-0c0c0d?style=flat&labelColor=2b2b2b" alt="dark canvas: #0c0c0d">
+<img src="https://img.shields.io/badge/dark_panel-%23141416-141416?style=flat&labelColor=2b2b2b" alt="dark panel: #141416">
+<img src="https://img.shields.io/badge/dark_text-%23ededf0-ededf0?style=flat&labelColor=2b2b2b" alt="dark text: #ededf0">
+<img src="https://img.shields.io/badge/light_canvas-%23f5f5f6-f5f5f6?style=flat&labelColor=2b2b2b" alt="light canvas: #f5f5f6">
+<img src="https://img.shields.io/badge/light_text-%231b1b1d-1b1b1d?style=flat&labelColor=2b2b2b" alt="light text: #1b1b1d">
+</p>
 
 <br>
 
@@ -386,8 +407,7 @@ syncro/
 ├── index.html      # the complete app: markup, styles and script in one file
 ├── app.js          # application script
 ├── style.css       # stylesheet
-├── README.md       # you are here
-└── assets/         # README artwork: banner, previews, palette, divider
+└── README.md       # you are here
 ```
 
 <br>
@@ -448,21 +468,18 @@ A few house rules keep SYNCRO feeling like SYNCRO: stay dependency-free, use the
 
 **A team of the best, building the best.** Designers and developers, one mission.
 
-<a href="https://github.com/UNFOTABLE01/syncro/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=UNFOTABLE01/syncro" alt="Contributors">
-</a>
+<a href="https://github.com/UNFOTABLE01/syncro/graphs/contributors"><img src="https://img.shields.io/github/contributors/UNFOTABLE01/syncro?style=flat&labelColor=2b2b2b&color=3fae44&logo=github&logoColor=white" alt="Contributors"></a>
 
-<br><br>
 
-<img src="assets/divider.svg" alt="" width="100%">
+---
 
 <div align="center">
 
-<br>
-
 **Notes, sheets and boards, in sync with your flow.**
 
-<sub>If SYNCRO makes your day a little simpler, a ⭐ on the repo means a lot.</sub>
+<a href="https://github.com/UNFOTABLE01/syncro"><img src="https://img.shields.io/github/stars/UNFOTABLE01/syncro?style=social" alt="Star on GitHub"></a>
+
+<sub>If SYNCRO makes your day a little simpler, a star on the repo means a lot.</sub>
 
 <br>
 
