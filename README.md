@@ -10,8 +10,6 @@
   <img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/4cc1d7a3-df4b-462c-b3bd-84261100ee71" />
 
 <br><br>
-
-
 <br>
 
 <a href="https://github.com/UNFOTABLE01/syncro/stargazers"><img src="https://img.shields.io/github/stars/UNFOTABLE01/syncro?style=flat-square&color=282420&labelColor=0c0c0d&logo=github" alt="Stars"></a>
