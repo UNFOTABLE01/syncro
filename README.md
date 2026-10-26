@@ -1,13 +1,16 @@
 <div align="center">
-<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/4cc1d7a3-df4b-462c-b3bd-84261100ee71" />
 
-<br><br>
-
+  
 <img src="https://img.shields.io/badge/HTML5-282420?style=for-the-badge&logo=html5&logoColor=E34F26" alt="HTML5">
 <img src="https://img.shields.io/badge/CSS3-282420?style=for-the-badge&logo=css3&logoColor=1572B6" alt="CSS3">
 <img src="https://img.shields.io/badge/JavaScript-282420?style=for-the-badge&logo=javascript&logoColor=F7DF1E" alt="JavaScript">
 <img src="https://img.shields.io/badge/build_step-none-3fae44?style=for-the-badge&labelColor=282420" alt="No build step">
-<img src="https://img.shields.io/badge/dependencies-0-3fae44?style=for-the-badge&labelColor=282420" alt="Zero dependencies">
+<img src="https://img.shields.io/badge/dependencies-0-3fae44?style=for-the-badge&labelColor=282420" alt="Zero dependencies">  
+  
+  <img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/4cc1d7a3-df4b-462c-b3bd-84261100ee71" />
+
+<br><br>
+
 
 <br>
 
