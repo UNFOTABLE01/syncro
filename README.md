@@ -1,6 +1,7 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="SYNCRO: Notes, Sheets and Boards, in sync with your flow" width="100%">
+<img src="assets/banner.svg" alt="<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/d2308d0d-9351-4dad-9591-cd5f62ddc961" />
+w" width="100%">
 
 <br><br>
 
