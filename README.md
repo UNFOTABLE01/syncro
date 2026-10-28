@@ -478,5 +478,8 @@ A few house rules keep SYNCRO feeling like SYNCRO: stay dependency-free, use the
 <br>
 
 <a href="#readme">Back to top</a>
+<a href="https://github.com">
+  <img src="https://github.com.png" width="60px" style="border-radius: 50%;" alt="USERNAME's Profile Picture"/>
+</a>
 
 </div>
